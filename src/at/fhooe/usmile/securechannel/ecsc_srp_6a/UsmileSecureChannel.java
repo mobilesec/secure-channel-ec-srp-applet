@@ -118,10 +118,10 @@ public class UsmileSecureChannel {
 				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_salt_iv);
 				break;
 
-			case INS_KEY_AGREEMENT_READ:
-				short len_output = usmileKeyAgreement.getOutputValue(incomingBuf, ISO7816.OFFSET_CLA);
-				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_output);
-				break;
+//			case INS_KEY_AGREEMENT_READ:
+//				short len_output = usmileKeyAgreement.getOutputValue(incomingBuf, ISO7816.OFFSET_CLA);
+//				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_output);
+//				break;
  
 			case INS_KEY_AGREEMENT_03:
 				if (currentStage[(short) 0x00] == 0x01) {
@@ -139,7 +139,7 @@ public class UsmileSecureChannel {
 							connectionTries = (byte)0x00;
 						}
 					}else{
-					//	ISOException.throwIt(SW_FAILED);
+//						ISOException.throwIt(ISO7816.SW_DATA_INVALID);
 					}
 				}
 				break; 
