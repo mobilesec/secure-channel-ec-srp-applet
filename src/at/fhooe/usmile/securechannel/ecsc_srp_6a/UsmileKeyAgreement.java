@@ -57,6 +57,7 @@ public class UsmileKeyAgreement {
 	
 	private static byte[] v_Pi;
 	private static byte[] salt;
+	private static byte[] redp;
 
 	final static byte[] SecP192r1_P = { // 24
 		(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,
@@ -169,6 +170,7 @@ public class UsmileKeyAgreement {
 		 * g) ... g.. padded with leading 0s
 		 */
 		v_Pi = new byte[(short) EC_POINT_LENGTH];
+		redp = new byte[(short) EC_POINT_LENGTH];
 //		i2 = new byte[(short) LENGTH_MESSAGE_DIGEST];
 		salt = new byte[(short) 0x10];
 //		B = new byte[(short) 0x100];
@@ -215,7 +217,19 @@ public class UsmileKeyAgreement {
 		 */
 		calculateVPi( v_Pi, (short) (0), i1.as_byte_array(), (short) (LENGTH_MESSAGE_DIGEST-LENGTH_MODULUS), LENGTH_MODULUS);
 
+		// Copy V_Pi to temporary buffer
+		Util.arrayCopy(v_Pi, (short) 0, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1));
+		tempBuffer[OUTPUT_OFFSET_S] = (byte)0x01;
 		
+		Bignat q = new Bignat((short)LENGTH_MODULUS, false);
+		q.from_byte_array(LENGTH_MODULUS, (short)0, SecP192r1_P, (short)0);
+		short redpLength = Redp1(q, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1), redp, (short) (1));
+		
+		if (redpLength == 0){
+			ISOException.throwIt(ISO7816.SW_DATA_INVALID);
+		} 
+		
+//		redp[0] = 0x04;
 				
 		/**
 		 * compute K = H(N, g)
@@ -319,50 +333,46 @@ public class UsmileKeyAgreement {
 		Q_A.setW(incomingBuf, ISO7816.OFFSET_CDATA, apdu.getIncomingLength());
 		
 		/**
-		 * Q_B = G*d_b + REDP(X(vPi))
+		 * Compute Q_B = G*d_b + REDP(X(vPi))
 		 */
 
-		Bignat q = new Bignat((short)LENGTH_MODULUS, false);
-		q.from_byte_array(LENGTH_MODULUS, (short)0, SecP192r1_P, (short)0);
-		
-		Util.arrayCopy(v_Pi, (short) 0, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1));
-		tempBuffer[OUTPUT_OFFSET_S] = (byte)0x01;
-		
-		short redpLength = Redp1(q, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1), tempBuffer, (short) (OUTPUT_OFFSET_S + 1));
-		
-		if (redpLength == 0){
-			ISOException.throwIt(ISO7816.SW_DATA_INVALID);
-		} 
-		
-		// Compute Q_B
-		tempBuffer[OUTPUT_OFFSET_S] = 0x04;
-		ecPublic.addPoint(tempBuffer, OUTPUT_OFFSET_S, EC_POINT_LENGTH);
+//		Util.arrayCopy(redp, (short) 0, incomingBuf, ISO7816.OFFSET_CDATA, EC_POINT_LENGTH);
+//		apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, (short) EC_POINT_LENGTH);
+		redp[0] = 0x04;
+		ecPublic.addPoint(redp, (short) 0, EC_POINT_LENGTH);
 		
 		// Safe Q_A to EC Point representation
 		Util.arrayCopy(incomingBuf, ISO7816.OFFSET_CDATA, tempBuffer, (short) 0, apdu.getIncomingLength());
 		
 		// Write Q_B in outgoing buffer
-		short len = ecPublic.getW(incomingBuf, ISO7816.OFFSET_CLA);
+		ecPublic.getW(incomingBuf, ISO7816.OFFSET_CLA);
 
 		// Write Q_B to temporary buffer 
-		ecPublic.getW(tempBuffer, (short) EC_POINT_LENGTH);
+//		ecPublic.getW(tempBuffer, (short) EC_POINT_LENGTH);
 		
 		/**
 		 * Compute o3 = H( X (Q_A) | X (Q_B))
 		 */
 		// Only use X coordinate of Q_A and Q_B --> set first byte to 1
 		tempBuffer[0] = 0x01;
-		tempBuffer[EC_POINT_LENGTH] = 0x01;
+		incomingBuf[ ISO7816.OFFSET_CLA] = 0x01;
 
 		msgDigest_SHA256.update(tempBuffer, (short) 0x0,
 				(short) (LENGTH_MODULUS + 1));
-		msgDigest_SHA256.doFinal(tempBuffer, (short) (short) EC_POINT_LENGTH, (short) (LENGTH_MODULUS + 1),
+		msgDigest_SHA256.doFinal(incomingBuf, ISO7816.OFFSET_CLA, (short) (LENGTH_MODULUS + 1),
 				tempBuffer, (short) (OUTPUT_OFFSET_1)); // Store the digest at OFSSET 1 so that it can be used
 														// for verification
+		
+		// Set the describing-Byte of the Public ECPoint back to 4 
+		incomingBuf[ISO7816.OFFSET_CLA] = 0x04;
 
 		/**
 		 * Compute i2 = OS2IP ( o3 )
 		 */
+
+		Bignat q = new Bignat((short)LENGTH_MODULUS, false);
+		q.from_byte_array(LENGTH_MODULUS, (short)0, SecP192r1_P, (short)0);
+		
 		Bignat i2 = new Bignat(LENGTH_MESSAGE_DIGEST, false);
 		i2.from_byte_array(LENGTH_MESSAGE_DIGEST, (short)0, tempBuffer, (short)(OUTPUT_OFFSET_1));
 		i2.remainder_divide(q, null);
@@ -375,7 +385,7 @@ public class UsmileKeyAgreement {
 		multiplyECPoint(v_Pi, (short)0, tempBuffer, (short)0, LENGTH_MODULUS, tempBuffer, (short)0);
 		
 		Q_A.addPoint(tempBuffer, (short) 0, (short) EC_POINT_LENGTH);
-		len = Q_A.getW(tempBuffer, (short) 0);
+		short len = Q_A.getW(tempBuffer, (short) 0);
 		ecMultiply.init(ecPrivate);
 		
 		/**
@@ -396,13 +406,11 @@ public class UsmileKeyAgreement {
 		//Util.arrayFillNonAtomic(tempBuffer, OFFSET_b, (short) 0x20, (byte) 0x00);
 
 		/**
-		 * compute random point e1
+		 * Return Q_B + salt and IV
 		 */
-		
-		/**
-		 * Return Q_B
-		 */
-		apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, (short) len);
+//		short len = ecPublic.getW(incomingBuf, (short) ISO7816.OFFSET_CLA);
+		len += getSalt_and_IV(incomingBuf, (short)(ISO7816.OFFSET_CLA + EC_POINT_LENGTH));
+		apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len);
 		return true;
 	}
 
@@ -449,167 +457,170 @@ public class UsmileKeyAgreement {
 		return output;
 	}*/
 	private short computeRandomPoint(Bignat i1, Bignat q, byte[] outarray,  short offset, byte counter) {
-		byte[] o2 = getPadded(i1.as_byte_array(),(short)0,i1.length(), LENGTH_MESSAGE_DIGEST);
+		byte[] o2 = null;
 		byte[] o3 = new byte[LENGTH_MESSAGE_DIGEST];
-		msgDigest_SHA256.doFinal(o2, (short) 0, LENGTH_MESSAGE_DIGEST,
-				o3, (short) 0x00);
-
 		Bignat x = new Bignat(LENGTH_MESSAGE_DIGEST, false);
-		x.from_byte_array(LENGTH_MESSAGE_DIGEST, (short) 0, o3, (short)0x0);
-		x.remainder_divide(q, null);
-		
-		Util.arrayFillNonAtomic(outarray, (short) (offset), (short) (LENGTH_MODULUS*2), (byte) 0 );
-		Util.arrayCopy(x.as_byte_array(), (short) (LENGTH_MESSAGE_DIGEST - LENGTH_MODULUS), outarray, offset, LENGTH_MODULUS);
-
-		
 		short outputElength = 0;
 		
-		if (!Bignat.valueOf(LENGTH_MODULUS, (byte)0).same_value(x)){
-			byte mu = (byte) (i1.getLastByte() & 0x01);
+		while(counter < 5 && outputElength == 0) {
+			o2 = getPadded(i1.as_byte_array(),(short)0,i1.length(), LENGTH_MESSAGE_DIGEST);
+			msgDigest_SHA256.doFinal(o2, (short) 0, LENGTH_MESSAGE_DIGEST,
+					o3, (short) 0x00);
+	
+			x.from_byte_array(LENGTH_MESSAGE_DIGEST, (short) 0, o3, (short)0x0);
+			x.remainder_divide(q, null);
 			
-//			if(ECAlgorithms.isF2mCurve(ecSpec.getCurve())){ 
-//				//TODO				
-//			} else if(ECAlgorithms.isFpCurve(ecSpec.getCurve())) { 
-//				BigInteger p = ecSpec.getCurve().getField().getCharacteristic();
+			Util.arrayFillNonAtomic(outarray, (short) (offset), (short) (LENGTH_MODULUS*2), (byte) 0 );
+			Util.arrayCopy(x.as_byte_array(), (short) (LENGTH_MESSAGE_DIGEST - LENGTH_MODULUS), outarray, offset, LENGTH_MODULUS);
+	
 			
-				if (Bignat.valueOf(LENGTH_MODULUS, (byte)3).same_value(q)){
-					// TODO
-				} else { //TODO if (BigInteger.valueOf(3).compareTo(p) == -1){
-					short length; 
-					//p is greater than 3
-
-//					outputElength = (short) x.length();
-					
-		    		
-		    		try{
-			    		/**
-			    		 * compute x^2
-			    		 */
-		    			// TODO very slow, can it be improved? Maybe using EC co-processor?
-		    			rsaCipher.init(rsaPublicKey_forSquareMul, Cipher.MODE_ENCRYPT);
-		    			// Fill temporary buffer of size SQUARE_MULTIPLICATION_MODULUS with zeros
-		    			Util.arrayFillNonAtomic(tempBuffer, (short) (0), (short) LENGTH_SQUARE_MULT_MODULUS, (byte) 0 );
-		    			// Put padding before and after x (e.g. [20 B] | x | [20 B])
-		    			Util.arrayCopy(x.as_byte_array(), (short) (x.length() - LENGTH_MODULUS), tempBuffer, 
-		    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT), 
-		    					LENGTH_MODULUS );
-		    			
-//		    			Util.arrayCopy(tempBuffer, (short)0, outarray, (short)(offset), LENGTH_SQUARE_MULT_MODULUS);
-		    			length = rsaCipher.doFinal(tempBuffer, (short) 0, (short) (LENGTH_SQUARE_MULT_MODULUS), tempBuffer, (short) 0);
-//		    			Util.arrayCopy(tempBuffer, (short)0, outarray, (short)(offset), LENGTH_SQUARE_MULT_MODULUS);
-//		    			
-//		    			outarray[offset] = tempBuffer[0];
-		    			/*
-		    			Util.arrayFillNonAtomic(tempBuffer, (short) 0, (short) 64, (byte) 0 );
-		    			Util.arrayCopy(x.as_byte_array(), (short) 0, tempBuffer, (byte) (64 - x.length()), x.length() );
-		    			length = rsaCipher.doFinal(tempBuffer, (short) 0, (short) 64, tempBuffer, (short) 0);
-
-		    			Bignat x2 = new Bignat((short)64, false);
-		    			x2.from_byte_array((short)64, (short) 0, tempBuffer, (short)0x0);
-		    			x2.remainder_divide(q, null);
-		    			Util.arrayCopy(x2.as_byte_array(), (short) 32, outarray, (byte) offset, (short) 32 );
-		    			*/
-//		    			Util.arrayFillNonAtomic(outarray, (short) (offset), (short) LENGTH_SQUARE_MULT_MODULUS, (byte) 0 );
-//		    			Util.arrayCopy(x.as_byte_array(), (short)0, outarray, (short)(offset+ LENGTH_MESSAGE_DIGEST), x.length());
-
-			    		/**
-			    		 * add A
-			    		 */
-//		    			Util.arrayCopy(tempBuffer, (short)0, outarray, (short)(offset), LENGTH_MODULUS);
+			if (!Bignat.valueOf(LENGTH_MODULUS, (byte)0).same_value(x)){
+//				byte mu = (byte) (i1.getLastByte() & 0x01);
+				
+	//			if(ECAlgorithms.isF2mCurve(ecSpec.getCurve())){ 
+	//				//TODO				
+	//			} else if(ECAlgorithms.isFpCurve(ecSpec.getCurve())) { 
+	//				BigInteger p = ecSpec.getCurve().getField().getCharacteristic();
+				
+					if (Bignat.valueOf(LENGTH_MODULUS, (byte)3).same_value(q)){
+						// TODO
+					} else { //TODO if (BigInteger.valueOf(3).compareTo(p) == -1){
+						short length; 
+						//p is greater than 3
+	
+	//					outputElength = (short) x.length();
+						
 			    		
-		    			if(add(tempBuffer, (short)0, LENGTH_MODULUS, SecP192r1_A, (short)0, (short) SecP192r1_A.length)){
-			    			subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, SecP192r1_P_ForRSA,
-			    					(short) 0, LENGTH_MODULUS);
-			    			outarray[LENGTH_SQUARE_MULT_MODULUS-1] = 0x01;
+			    		try{
+				    		/**
+				    		 * compute x^2
+				    		 */
+			    			// TODO very slow, can it be improved? Maybe using EC co-processor?
+			    			rsaCipher.init(rsaPublicKey_forSquareMul, Cipher.MODE_ENCRYPT);
+			    			// Fill temporary buffer of size SQUARE_MULTIPLICATION_MODULUS with zeros
+			    			Util.arrayFillNonAtomic(tempBuffer, (short) (0), (short) LENGTH_SQUARE_MULT_MODULUS, (byte) 0 );
+			    			// Put padding before and after x (e.g. [20 B] | x | [20 B])
+			    			Util.arrayCopy(x.as_byte_array(), (short) (x.length() - LENGTH_MODULUS), tempBuffer, 
+			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT), 
+			    					LENGTH_MODULUS );
+			    			
+	//		    			Util.arrayCopy(tempBuffer, (short)0, outarray, (short)(offset), LENGTH_SQUARE_MULT_MODULUS);
+			    			length = rsaCipher.doFinal(tempBuffer, (short) 0, (short) (LENGTH_SQUARE_MULT_MODULUS), tempBuffer, (short) 0);
+	//		    			Util.arrayCopy(tempBuffer, (short)0, outarray, (short)(offset), LENGTH_SQUARE_MULT_MODULUS);
+	//		    			
+	//		    			outarray[offset] = tempBuffer[0];
+				    		/*
+			    			Util.arrayFillNonAtomic(tempBuffer, (short) 0, (short) 64, (byte) 0 );
+			    			Util.arrayCopy(x.as_byte_array(), (short) 0, tempBuffer, (byte) (64 - x.length()), x.length() );
+			    			length = rsaCipher.doFinal(tempBuffer, (short) 0, (short) 64, tempBuffer, (short) 0);
+	
+			    			Bignat x2 = new Bignat((short)64, false);
+			    			x2.from_byte_array((short)64, (short) 0, tempBuffer, (short)0x0);
+			    			x2.remainder_divide(q, null);
+			    			Util.arrayCopy(x2.as_byte_array(), (short) 32, outarray, (byte) offset, (short) 32 );
+			    			*/
+	//		    			Util.arrayFillNonAtomic(outarray, (short) (offset), (short) LENGTH_SQUARE_MULT_MODULUS, (byte) 0 );
+	//		    			Util.arrayCopy(x.as_byte_array(), (short)0, outarray, (short)(offset+ LENGTH_MESSAGE_DIGEST), x.length());
+	
+				    		/**
+				    		 * add A
+				    		 */
+	//		    			Util.arrayCopy(tempBuffer, (short)0, outarray, (short)(offset), LENGTH_MODULUS);
+				    		
+			    			if(add(tempBuffer, (short)0, LENGTH_MODULUS, SecP192r1_A, (short)0, (short) SecP192r1_A.length)){
+				    			subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, SecP192r1_P_ForRSA,
+				    					(short) 0, LENGTH_MODULUS);
+				    		}
+	//			    		Util.arrayCopy(tempBuffer, (short)0, outarray, offset, LENGTH_MODULUS);
+
+							/**
+				    		 * (x^2 + A) * x
+				    		 */
+			    			//Copy (x^2 + A) to position after padding
+				    		Util.arrayCopy(tempBuffer, (short) 0, tempBuffer, 
+			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS );
+	
+				    		// Fill padding with zeros
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
+			    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
+				    		// Fill trailing bytes with zeros
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_PADDING_FOR_SQUARE_MULT + LENGTH_MODULUS), 
+			    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
+				    		
+			    			// Fill padding bytes with zeros
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_SQUARE_MULT_MODULUS), 
+			    					(short) LENGTH_SQUARE_MULT_MODULUS, (byte) 0 );
+				    		
+				    		// copy x after the current temporary buffer location
+			    			Util.arrayCopy(x.as_byte_array(), (short) (x.length() - LENGTH_MODULUS), tempBuffer, 
+			    					(byte) (LENGTH_SQUARE_MULT_MODULUS+LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS );
+	
+			    			// Multiply current value (x^2 + A) with x
+				    		modMultiply(tempBuffer, (short)0, (short) (LENGTH_SQUARE_MULT_MODULUS), 
+				    				tempBuffer, 
+				    				(short) (LENGTH_SQUARE_MULT_MODULUS),LENGTH_SQUARE_MULT_MODULUS, (short) (LENGTH_SQUARE_MULT_MODULUS*2));
+
+				    		/**
+				    		 * (x^2 + A) * x + b
+				    		 */
+				    		if(add(tempBuffer, (short)0, LENGTH_MODULUS, SecP192r1_B, (short)0, (short) SecP192r1_B.length)){
+				    			subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, SecP192r1_P_ForRSA,
+				    					(short) 0, LENGTH_MODULUS);
+				    		}
+				    		Util.arrayCopy(tempBuffer, (short)0, tempBuffer, LENGTH_SQUARE_MULT_MODULUS, LENGTH_MODULUS);
+				    		
+	//						Util.arrayCopy(tempBuffer, (short)0, outarray, offset, LENGTH_MODULUS);
+	//			    		Bignat alpha = new Bignat(LENGTH_MODULUS, false);
+	//			    		alpha.from_byte_array(length, (short)0, tempBuffer, (short)0);
+	//			    		
+				    		// Copy alpha to buffer
+				    		Util.arrayCopy(tempBuffer, (short) (0), tempBuffer, 
+			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT*2), LENGTH_MODULUS );
+				    		Util.arrayCopy(tempBuffer, (short)0, tempBuffer, OUTPUT_OFFSET_S, LENGTH_MODULUS);
+				    		tempBuffer[OUTPUT_OFFSET_S] = 0x01;
+				    		// Fill padding with zeros
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
+			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT*2), (byte) 0 );
+				    		
+				    		// Fill second area with zeros
+	//			    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_SQUARE_MULT_MODULUS), 
+	//		    					(short) (LENGTH_SQUARE_MULT_MODULUS), (byte) 0 );
+				    		
+				    		findSquareRoot(tempBuffer, (short)(0), 
+				    				LENGTH_SQUARE_MULT_MODULUS, q, tempBuffer, (short)(LENGTH_PADDING_FOR_SQUARE_MULT));
+				    		Util.arrayCopy(tempBuffer, (short)LENGTH_PADDING_FOR_SQUARE_MULT, outarray, (short) (offset+LENGTH_MODULUS), LENGTH_MODULUS);
+				    		
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
+			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT), (byte) 0 );
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_PADDING_FOR_SQUARE_MULT+LENGTH_MODULUS), 
+			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT), (byte) 0 );
+				    		
+				    		length = rsaCipher.doFinal(tempBuffer, (short) 0, LENGTH_SQUARE_MULT_MODULUS, tempBuffer, (short) 0);
+
+				    		if(Util.arrayCompare(tempBuffer, (short) 0, tempBuffer, LENGTH_SQUARE_MULT_MODULUS, LENGTH_MODULUS) == 0){
+					    		outputElength = LENGTH_MODULUS;
+				    		} else {
+				    			i1.add(Bignat.valueOf((byte) 1, (byte) 1));
+				    			counter++;
+	//			    			return computeRandomPoint(i1, q, outarray, offset, ++counter);
+				    		}
+			    		} catch(CryptoException e){
+			    			if (e.getReason() == CryptoException.ILLEGAL_USE){
+			    				outarray[offset] = 0x01;
+			    			}
+			    			else if (e.getReason() == CryptoException.INVALID_INIT){
+			    				outarray[offset] = 0x02;
+			    			}
+			    			else if (e.getReason() == CryptoException.ILLEGAL_VALUE){
+			    				outarray[offset] = 0x03;
+			    			}
+			    			else if (e.getReason() == CryptoException.UNINITIALIZED_KEY){
+			    				outarray[offset] = 0x04;
+			    			} else {
+			    				outarray[offset] = 0x0f;
+			    			}
 			    		}
-//			    		Util.arrayCopy(tempBuffer, (short)0, outarray, offset, LENGTH_MODULUS);
-			    		
-						/**
-			    		 * (x^2 + A) * x
-			    		 */
-		    			//Copy (x^2 + A) to position after padding
-			    		Util.arrayCopy(tempBuffer, (short) 0, tempBuffer, 
-		    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS );
-
-			    		// Fill padding with zeros
-			    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
-		    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
-			    		// Fill trailing bytes with zeros
-			    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_PADDING_FOR_SQUARE_MULT + LENGTH_MODULUS), 
-		    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
-			    		
-			    		
-			    		// copy x after the current temporary buffer location
-		    			Util.arrayCopy(x.as_byte_array(), (short) (x.length() - LENGTH_MODULUS), tempBuffer, 
-		    					(byte) (LENGTH_SQUARE_MULT_MODULUS+LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS );
-
-		    			// Fill padding bytes with zeros
-			    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_SQUARE_MULT_MODULUS), 
-		    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
-//			    		
-		    			// Multiply current value (x^2 + A) with x
-			    		modMultiply(tempBuffer, (short)0, (short) (LENGTH_SQUARE_MULT_MODULUS), 
-			    				tempBuffer, 
-			    				(short) (LENGTH_SQUARE_MULT_MODULUS),LENGTH_SQUARE_MULT_MODULUS, outarray, (short) (offset+LENGTH_MODULUS));
-		    			
-			    		
-			    		/**
-			    		 * (x^2 + A) * x + b
-			    		 */
-			    		if(add(tempBuffer, (short)0, LENGTH_MODULUS, SecP192r1_B, (short)0, (short) SecP192r1_B.length)){
-			    			subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, SecP192r1_P_ForRSA,
-			    					(short) 0, LENGTH_MODULUS);
-			    		}
-			    		Util.arrayCopy(tempBuffer, (short)0, tempBuffer, LENGTH_SQUARE_MULT_MODULUS, LENGTH_MODULUS);
-//						Util.arrayCopy(tempBuffer, (short)0, outarray, offset, LENGTH_MODULUS);
-//			    		Bignat alpha = new Bignat(LENGTH_MODULUS, false);
-//			    		alpha.from_byte_array(length, (short)0, tempBuffer, (short)0);
-//			    		
-			    		// Copy alpha to buffer
-			    		Util.arrayCopy(tempBuffer, (short) (0), tempBuffer, 
-		    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT*2), LENGTH_MODULUS );
-
-			    		// Fill padding with zeros
-			    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
-		    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT*2), (byte) 0 );
-			    		
-			    		// Fill second area with zeros
-//			    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_SQUARE_MULT_MODULUS), 
-//		    					(short) (LENGTH_SQUARE_MULT_MODULUS), (byte) 0 );
-			    		
-			    		findSquareRoot(tempBuffer, (short)(0), 
-			    				LENGTH_SQUARE_MULT_MODULUS, q, tempBuffer, (short)(LENGTH_PADDING_FOR_SQUARE_MULT));
-			    		Util.arrayCopy(tempBuffer, (short)LENGTH_PADDING_FOR_SQUARE_MULT, outarray, (short) (offset+LENGTH_MODULUS), LENGTH_MODULUS);
-			    		
-			    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
-		    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT), (byte) 0 );
-			    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_PADDING_FOR_SQUARE_MULT+LENGTH_MODULUS), 
-		    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT), (byte) 0 );
-			    		
-			    		length = rsaCipher.doFinal(tempBuffer, (short) 0, LENGTH_SQUARE_MULT_MODULUS, tempBuffer, (short) 0);
-			    		
-			    		if(Util.arrayCompare(tempBuffer, (short) 0, tempBuffer, LENGTH_SQUARE_MULT_MODULUS, LENGTH_MODULUS) == 0){
-				    		outputElength = LENGTH_MODULUS;
-			    		} else if(counter<=3){
-			    			i1.add(Bignat.valueOf((byte) 1, (byte) 1));
-			    			return computeRandomPoint(i1, q, outarray, offset, ++counter);
-			    		}
-		    		} catch(CryptoException e){
-		    			if (e.getReason() == CryptoException.ILLEGAL_USE){
-		    				outarray[offset] = 0x01;
-		    			}
-		    			else if (e.getReason() == CryptoException.INVALID_INIT){
-		    				outarray[offset] = 0x02;
-		    			}
-		    			else if (e.getReason() == CryptoException.ILLEGAL_VALUE){
-		    				outarray[offset] = 0x03;
-		    			}
-		    			else if (e.getReason() == CryptoException.UNINITIALIZED_KEY){
-		    				outarray[offset] = 0x04;
-		    			} else {
-		    				outarray[offset] = 0x0f;
-		    			}
-		    		}
+				}
 			}
 		}
 
@@ -720,13 +731,14 @@ public class UsmileKeyAgreement {
 		return (short) (LENGTH_SALT + LENGTH_IV);
 	}
 
-//	public short getOutputValue(byte[] outArray, short offset){
-//
-//		// TODO Remove this, only for debugging
-//		Util.arrayCopy(tempBuffer, OUTPUT_OFFSET_S, outArray,
-//				(short) offset, LENGTH_SQUARE_MULT_MODULUS);
-//		return LENGTH_SQUARE_MULT_MODULUS;
-//	}
+	public short getOutputValue(byte[] outArray, short offset){
+
+		// TODO Remove this, only for debugging
+		Util.arrayCopy(redp, (short)0, outArray,
+				(short) offset, EC_POINT_LENGTH);
+//		outArray[offset] = 0x01;
+		return LENGTH_SQUARE_MULT_MODULUS;
+	}
 	/**
 	 * Verifies client authentication data M1 and sends Applet authentication
 	 * data M2 using the APDU reference
@@ -894,19 +906,16 @@ public class UsmileKeyAgreement {
 	 * @param yLength
 	 */
 	private void modMultiply(byte[] x, short xOffset, short xLength, byte[] y,
-			short yOffset, short yLength, byte[]outarray, short offset) {
-		Util.arrayCopy(x, xOffset, tempBuffer, (short) 0x00, xLength);
-
+			short yOffset, short yLength, short tempOutoffset) {
 		/**
 		 * x+y
 		 */
-
 		Util.arrayCopy(SecP192r1_P_ForRSA, (short) 0x00, tempBuffer, OUTPUT_OFFSET_2,
 				LENGTH_SQUARE_MULT_MODULUS);
-		Util.arrayCopy(x, (short)xOffset, outarray, offset, xLength);
-		if (add(x, (short)LENGTH_PADDING_FOR_SQUARE_MULT, (short)(LENGTH_MODULUS), y,
-				(short) (yOffset+LENGTH_PADDING_FOR_SQUARE_MULT), (short)LENGTH_MODULUS)) {
-			subtract(x, (short) LENGTH_PADDING_FOR_SQUARE_MULT, (short) (LENGTH_MODULUS), tempBuffer,
+		Util.arrayCopy(x, xOffset, tempBuffer, tempOutoffset, xLength);
+		if (add(x, LENGTH_PADDING_FOR_SQUARE_MULT, (LENGTH_MODULUS), y,
+				(short) (yOffset+LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS)) {
+			subtract(x, LENGTH_PADDING_FOR_SQUARE_MULT, (LENGTH_MODULUS), tempBuffer,
 					OUTPUT_OFFSET_2, LENGTH_MODULUS);
 		} // OK
 		
@@ -915,24 +924,22 @@ public class UsmileKeyAgreement {
 		 */
 
 		rsaCipher.init(rsaPublicKey_forSquareMul, Cipher.MODE_ENCRYPT);
-		rsaCipher.doFinal(x, (short) xOffset, LENGTH_SQUARE_MULT_MODULUS, tempBuffer,
-				(short) 0); // OK
+		rsaCipher.doFinal(x, xOffset, LENGTH_SQUARE_MULT_MODULUS, x,
+				xOffset); // OK
 
 		/**
 		 * compute x^2
 		 */
-//		Util.arrayCopy(tempBuffer, (short)0, outarray, offset, xLength);
-		rsaCipher.doFinal(outarray, offset, LENGTH_SQUARE_MULT_MODULUS, outarray, offset); // OK
+		rsaCipher.doFinal(tempBuffer, tempOutoffset, LENGTH_SQUARE_MULT_MODULUS, tempBuffer, tempOutoffset); // OK
 
 		/**
 		 * compute (x+y)^2 - x^2
 		 */
-		if (subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, outarray, offset,
+		if (subtract(x, xOffset, LENGTH_MODULUS, tempBuffer, tempOutoffset,
 				LENGTH_MODULUS)) {
-			add(tempBuffer, (short) 0x00, LENGTH_MODULUS, tempBuffer,
+			add(x, xOffset, LENGTH_MODULUS, tempBuffer,
 					OUTPUT_OFFSET_2, LENGTH_MODULUS);
 		} // OK
-//		Util.arrayCopy(tempBuffer, (short)0, outarray, offset, LENGTH_MODULUS);
 
 		/**
 		 * compute y^2
@@ -944,20 +951,19 @@ public class UsmileKeyAgreement {
 		 * compute (x+y)^2 - x^2 - y^2
 		 */
 
-		if (subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, y, yOffset,
+		if (subtract(x, xOffset, LENGTH_MODULUS, y, yOffset,
 				LENGTH_MODULUS)) {
 
-			add(tempBuffer, (short) 0x00, LENGTH_MODULUS, tempBuffer,
+			add(x, xOffset, LENGTH_MODULUS, tempBuffer,
 					OUTPUT_OFFSET_2, LENGTH_MODULUS);
 
 		}
 
-//		Util.arrayCopy(tempBuffer, (short)0, outarray, offset, LENGTH_MODULUS);
 		/**
 		 * divide by 2
 		 */
 
-		modular_division_by_2(tempBuffer, (short) 0x00, LENGTH_MODULUS);
+		modular_division_by_2(x, xOffset, LENGTH_MODULUS);
 
 	}
 

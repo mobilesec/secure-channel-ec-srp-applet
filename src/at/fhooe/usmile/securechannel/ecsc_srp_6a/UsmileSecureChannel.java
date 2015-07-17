@@ -113,15 +113,15 @@ public class UsmileSecureChannel {
 					currentStage[(short) 0x00] = 0x01;
 				}
 				break; 
-			case INS_KEY_AGREEMENT_02:
-				short len_salt_iv = usmileKeyAgreement.getSalt_and_IV(incomingBuf, ISO7816.OFFSET_CLA);
-				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_salt_iv);
-				break;
-
-//			case INS_KEY_AGREEMENT_READ:
-//				short len_output = usmileKeyAgreement.getOutputValue(incomingBuf, ISO7816.OFFSET_CLA);
-//				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_output);
+//			case INS_KEY_AGREEMENT_02:
+//				short len_salt_iv = usmileKeyAgreement.getSalt_and_IV(incomingBuf, ISO7816.OFFSET_CLA);
+//				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_salt_iv);
 //				break;
+
+			case INS_KEY_AGREEMENT_READ:
+				short len_output = usmileKeyAgreement.getOutputValue(incomingBuf, ISO7816.OFFSET_CLA);
+				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_output);
+				break;
  
 			case INS_KEY_AGREEMENT_03:
 				if (currentStage[(short) 0x00] == 0x01) {
