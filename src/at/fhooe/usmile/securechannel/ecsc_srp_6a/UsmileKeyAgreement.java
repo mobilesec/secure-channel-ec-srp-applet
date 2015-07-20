@@ -12,10 +12,13 @@ import javacard.security.KeyAgreement;
 import javacard.security.KeyBuilder;
 import javacard.security.KeyPair;
 import javacard.security.MessageDigest;
+import javacard.security.PrivateKey;
 import javacard.security.RSAPrivateKey;
 import javacard.security.RSAPublicKey;
 import javacard.security.RandomData;
+import javacard.security.Signature;
 import javacardx.crypto.Cipher;
+import javacardx.framework.math.BigNumber;
 
 import com.nxp.id.jcopx.ECPoint;
 import com.nxp.id.jcopx.ECPointBuilder;
@@ -31,7 +34,7 @@ public class UsmileKeyAgreement {
 	private final static short OUTPUT_OFFSET_1 = (short) 0x140;
 	private final static short OUTPUT_OFFSET_2 = (short) 0x180;
 
-	private static final short EC_POINT_LENGTH = LENGTH_MODULUS * 2 + 1;
+	private static final short LENGTH_EC_POINT = LENGTH_MODULUS * 2 + 1;
 	
 	private MessageDigest msgDigest_SHA256;
 	private final static short LENGTH_MESSAGE_DIGEST = 0x20;
@@ -45,7 +48,7 @@ public class UsmileKeyAgreement {
 
 	private Cipher rsaCipher;
 	private Cipher rsaCipherModPow;
-
+	
 	private RSAPublicKey rsaPublicKey_forSquareMul;
 	private RSAPublicKey rsaPublicKey_forModPow;
 
@@ -58,7 +61,8 @@ public class UsmileKeyAgreement {
 	private static byte[] v_Pi;
 	private static byte[] salt;
 	private static byte[] redp;
-
+	private static Bignat SecP192r1_Q; 
+	
 	final static byte[] SecP192r1_P = { // 24
 		(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,
 		(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,(byte) 0xFF,
@@ -118,7 +122,11 @@ public class UsmileKeyAgreement {
 
 	final static byte[] squareExponent = new byte[] { 0x02 };
 	final static byte[] modulosExponent = new byte[] { 0x01 };
-
+	KeyAgreement agreement;
+	ECPrivateKey pointPrivate;
+	ECPoint nxpPointForAddition;
+	KeyPair keyPair;
+	
 	/**
 	 * Constructors
 	 * 
@@ -150,31 +158,54 @@ public class UsmileKeyAgreement {
 				KeyBuilder.TYPE_RSA_PUBLIC, KeyBuilder.LENGTH_RSA_512, false);
 		rsaPublicKey_forModPow = (RSAPublicKey) KeyBuilder.buildKey(
 				KeyBuilder.TYPE_RSA_PUBLIC, KeyBuilder.LENGTH_RSA_512, false);
-
+		
 		rsaCipher = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
 		rsaCipherModPow = Cipher.getInstance(Cipher.ALG_RSA_NOPAD, false);
+		
 		rsaPublicKey_forSquareMul.setExponent(squareExponent, (short) 0x00,
 				(short) 0x01);
-
 
 		/**
 		 * set public key modulus
 		 */
 		rsaPublicKey_forSquareMul.setModulus(SecP192r1_P_ForRSA, (short) 0x00, (short) 0x40);
 		rsaPublicKey_forModPow.setModulus(SecP192r1_P_ForRSA, (short) 0x00, (short) 0x40);
-		// rsaPublicKey.setModulus(N, (short) 0x00, LENGTH_MODULUS);
 
 		/**
 		 * v and KV are should be computed here from SRP 6a v = g^X X = H (salt,
 		 * H(identity':'password)) .... from bouncy castle SRP 6a API K = H(N,
 		 * g) ... g.. padded with leading 0s
 		 */
-		v_Pi = new byte[(short) EC_POINT_LENGTH];
-		redp = new byte[(short) EC_POINT_LENGTH];
+		v_Pi = new byte[(short) LENGTH_EC_POINT];
+		redp = new byte[(short) LENGTH_EC_POINT];
 //		i2 = new byte[(short) LENGTH_MESSAGE_DIGEST];
 		salt = new byte[(short) 0x10];
 //		B = new byte[(short) 0x100];
 
+		/**
+		 * Initialize point and agreement scheme for Elliptic curve multiplication
+		 */
+		pointPrivate = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_192, false);
+		nxpPointForAddition = ECPointBuilder.buildECPoint(ECPointBuilder.TYPE_EC_FP_POINT,KeyBuilder.LENGTH_EC_FP_192);
+
+		initializeECPoint(nxpPointForAddition);
+		initializeECPoint(pointPrivate);
+		
+		agreement = KeyAgreementX.getInstance(KeyAgreementX.ALG_EC_SVDP_DH_PLAIN_XY, false);
+		
+
+		/**
+		 * Initialize EC Keys for Point addition (pub keys from alice and bob)
+		 */
+		// Initialize public / private key pair
+		keyPair = new KeyPair(KeyPair.ALG_EC_FP,KeyBuilder.LENGTH_EC_FP_192);
+		ecPrivate = (ECPrivateKey) keyPair.getPrivate();
+		ecPublic = ECPointBuilder.buildECPoint(ECPointBuilder.TYPE_EC_FP_POINT,KeyBuilder.LENGTH_EC_FP_192);
+
+		initializeECPoint((ECKey)keyPair.getPublic());
+		initializeECPoint(ecPrivate);
+		initializeECPoint(ecPublic);
+		
 		staticComputations(length);
 
 	}
@@ -207,6 +238,9 @@ public class UsmileKeyAgreement {
 		i1.from_byte_array(LENGTH_MESSAGE_DIGEST, (short) 0, tempBuffer, (short)0x0);
 		Bignat bn = new Bignat((short)LENGTH_MODULUS, false);
 		bn.from_byte_array(LENGTH_MODULUS, (short)0, SecP192r1_N, (short)0);
+
+		SecP192r1_Q = new Bignat((short)LENGTH_MODULUS, false);
+		SecP192r1_Q.from_byte_array(LENGTH_MODULUS, (short)0, SecP192r1_P, (short)0);
 		
 		i1.remainder_divide(bn, null);
 //		Util.arrayCopy(i1.as_byte_array(), (short) (LENGTH_MESSAGE_DIGEST-LENGTH_MODULUS), v, (short)0, LENGTH_MODULUS);
@@ -221,9 +255,7 @@ public class UsmileKeyAgreement {
 		Util.arrayCopy(v_Pi, (short) 0, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1));
 		tempBuffer[OUTPUT_OFFSET_S] = (byte)0x01;
 		
-		Bignat q = new Bignat((short)LENGTH_MODULUS, false);
-		q.from_byte_array(LENGTH_MODULUS, (short)0, SecP192r1_P, (short)0);
-		short redpLength = Redp1(q, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1), redp, (short) (1));
+		short redpLength = Redp1(SecP192r1_Q, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1), redp, (short) (1));
 		
 		if (redpLength == 0){
 			ISOException.throwIt(ISO7816.SW_DATA_INVALID);
@@ -271,127 +303,104 @@ public class UsmileKeyAgreement {
 	 *         false if the client public A is zero
 	 */
 	public boolean initWithSRP(APDU apdu, byte[] incomingBuf) {
-
-		/**
-		 * if incoming public A mod N = 0 abort
-		 */
-//		Util.arrayCopy(N, (short) 0x00, tempBuffer, OUTPUT_OFFSET_2,
-//				LENGTH_MODULUS);
-//		if ((Util.arrayCompare(incomingBuf, ISO7816.OFFSET_CDATA, tempBuffer,
-//				(short) 0x00, LENGTH_MODULUS) == 0)
-//				| (Util.arrayCompare(incomingBuf, ISO7816.OFFSET_CDATA,
-//						tempBuffer, OUTPUT_OFFSET_2, LENGTH_MODULUS) == 0)) {
-//
-//			return false;
-//		}
-
-		// apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, LENGTH_MODULUS);
-
-//		/**
-//		 * generate SE secret b and compute ... B = kv + g^b
-//		 */
-//		generateRandom(tempBuffer, OFFSET_b, KEYLENGTH);
-
-//		ECPublicKey pointPublic = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, KeyBuilder.LENGTH_EC_FP_192, false);
-//		ECPrivateKey pointPrivate = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_192, false);
-//
-//		initializeECPoint(pointPublic);
-//		initializeECPoint(pointPrivate);
-//		
-//		KeyPair keyPair = new KeyPair(pointPublic,pointPrivate);
-//		keyPair.genKeyPair();
-//		
-//		KeyAgreement agreement = KeyAgreementX.getInstance(KeyAgreementX.ALG_EC_SVDP_DH_PLAIN_XY, false);
-//		agreement.init(ecPrivate);
-//		short vPilen = agreement.generateSecret(incomingBuf, (short) (ISO7816.OFFSET_CDATA), apdu.getIncomingLength(), kv, (byte)0);
-		
-		
-
 		/**
 		 * Generate public/private keys
 		 */
-		//Initialize public / private key pair
-		KeyPair keyPair = new KeyPair(KeyPair.ALG_EC_FP,KeyBuilder.LENGTH_EC_FP_192);
-		initializeECPoint((ECKey)keyPair.getPublic());
-		ecPrivate = (ECPrivateKey) keyPair.getPrivate();
-		initializeECPoint(ecPrivate);
 		//Generate Private/Public key
 		keyPair.genKeyPair();
 		
-		//Create JCOP API EC Point and copy W into it
-		ecPublic = ECPointBuilder.buildECPoint(ECPointBuilder.TYPE_EC_FP_POINT,KeyBuilder.LENGTH_EC_FP_192);
+		//Copy new public key values into NXP EC point (public parameter of Bob) 
 		short lenW = ((ECPublicKey)keyPair.getPublic()).getW(tempBuffer, (short) 0x0);
-		initializeECPoint(ecPublic);
 		ecPublic.setW(tempBuffer, (short) 0x0, lenW);
 		
 		/**
 		 * Initialize Q_A from incoming buffer
 		 */
-		KeyAgreement ecMultiply = KeyAgreementX.getInstance(KeyAgreementX.ALG_EC_SVDP_DH_PLAIN_XY, false);
-		ECPoint Q_A = ECPointBuilder.buildECPoint(ECPointBuilder.TYPE_EC_FP_POINT,KeyBuilder.LENGTH_EC_FP_192);
-		initializeECPoint(Q_A);
-		Q_A.setW(incomingBuf, ISO7816.OFFSET_CDATA, apdu.getIncomingLength());
-		
+		nxpPointForAddition.setW(incomingBuf, ISO7816.OFFSET_CDATA, apdu.getIncomingLength());
+
+		///////////////////// ---- PUBLIC KEY Q_B COMPUTATION ---- /////////////////////
 		/**
 		 * Compute Q_B = G*d_b + REDP(X(vPi))
 		 */
-
-//		Util.arrayCopy(redp, (short) 0, incomingBuf, ISO7816.OFFSET_CDATA, EC_POINT_LENGTH);
-//		apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, (short) EC_POINT_LENGTH);
 		redp[0] = 0x04;
-		ecPublic.addPoint(redp, (short) 0, EC_POINT_LENGTH);
+		ecPublic.addPoint(redp, (short) 0, LENGTH_EC_POINT);
 		
-		// Safe Q_A to EC Point representation
+		// Save Q_A to temporary location for Hash computation
 		Util.arrayCopy(incomingBuf, ISO7816.OFFSET_CDATA, tempBuffer, (short) 0, apdu.getIncomingLength());
 		
 		// Write Q_B in outgoing buffer
 		ecPublic.getW(incomingBuf, ISO7816.OFFSET_CLA);
 
-		// Write Q_B to temporary buffer 
-//		ecPublic.getW(tempBuffer, (short) EC_POINT_LENGTH);
-		
 		/**
-		 * Compute o3 = H( X (Q_A) | X (Q_B))
+		 * Compute o3 = H( X (Q_A) | X (Q_B) )
 		 */
 		// Only use X coordinate of Q_A and Q_B --> set first byte to 1
 		tempBuffer[0] = 0x01;
-		incomingBuf[ ISO7816.OFFSET_CLA] = 0x01;
+		incomingBuf[ISO7816.OFFSET_CLA] = 0x01;
 
 		msgDigest_SHA256.update(tempBuffer, (short) 0x0,
 				(short) (LENGTH_MODULUS + 1));
 		msgDigest_SHA256.doFinal(incomingBuf, ISO7816.OFFSET_CLA, (short) (LENGTH_MODULUS + 1),
-				tempBuffer, (short) (OUTPUT_OFFSET_1)); // Store the digest at OFSSET 1 so that it can be used
+				tempBuffer, (short) (OUTPUT_OFFSET_1)); // Store the digest at OFFSET 1 so that it can be used
 														// for verification
 		
-		// Set the describing-Byte of the Public ECPoint back to 4 
+		// Set the description-byte of the Public ECPoint back to 4 
 		incomingBuf[ISO7816.OFFSET_CLA] = 0x04;
 
+		////////////////////// ---- SHARED SECRET COMPUTATION ---- //////////////////////
 		/**
 		 * Compute i2 = OS2IP ( o3 )
 		 */
+//		Bignat i2 = new Bignat(LENGTH_MESSAGE_DIGEST, false);
+//		i2.from_byte_array(LENGTH_MESSAGE_DIGEST, (short)0, tempBuffer, (short)(OUTPUT_OFFSET_1));
+//		i2.remainder_divide(SecP192r1_Q, null); // ~ 0,5 s
+		
+		try{
+//    		modMultiply(tempBuffer, (short)0, (short) (LENGTH_SQUARE_MULT_MODULUS), 
+//    				tempBuffer, 
+//    				(short) (LENGTH_SQUARE_MULT_MODULUS),LENGTH_SQUARE_MULT_MODULUS, (short) (LENGTH_SQUARE_MULT_MODULUS*2));
 
-		Bignat q = new Bignat((short)LENGTH_MODULUS, false);
-		q.from_byte_array(LENGTH_MODULUS, (short)0, SecP192r1_P, (short)0);
-		
-		Bignat i2 = new Bignat(LENGTH_MESSAGE_DIGEST, false);
-		i2.from_byte_array(LENGTH_MESSAGE_DIGEST, (short)0, tempBuffer, (short)(OUTPUT_OFFSET_1));
-		i2.remainder_divide(q, null);
-		
-		i2.to_byte_array(LENGTH_MODULUS, (short) (LENGTH_MESSAGE_DIGEST-LENGTH_MODULUS), tempBuffer, (short)0);
+    		Util.arrayFillNonAtomic(tempBuffer, (short) 0, (short)(LENGTH_SQUARE_MULT_MODULUS*2), (byte) 0);
+    		Util.arrayCopy(tempBuffer, OUTPUT_OFFSET_1, tempBuffer, (short)(LENGTH_PADDING_FOR_SQUARE_MULT-8), LENGTH_MESSAGE_DIGEST);
+    		tempBuffer[LENGTH_SQUARE_MULT_MODULUS + LENGTH_PADDING_FOR_SQUARE_MULT + LENGTH_MODULUS -1]=0x01;
+			modMultiply(tempBuffer, (short)0, LENGTH_SQUARE_MULT_MODULUS, tempBuffer, LENGTH_SQUARE_MULT_MODULUS, LENGTH_SQUARE_MULT_MODULUS, (short) (LENGTH_SQUARE_MULT_MODULUS*2));
+//			rsaCipherModulus.init(rsaPublicKey_forModulus, Cipher.MODE_ENCRYPT);
+//			rsaCipherModulus.doFinal(tempBuffer, OUTPUT_OFFSET_1, LENGTH_SQUARE_MULT_MODULUS, tempBuffer,  (short)0);
+//			PrivateKey pk = KeyAgreement.getInstance(KeyAgreementX.ALG_EC_SVDP_DH, externalAccess);
+//			KeyBuilder.buildKey(KeyBuil, keyLength, keyEncryption)
+//			ka.getInstance(algorithm, externalAccess)
+//			Util.arrayCopy(tempBuffer, (short) 0, redp, (short)0, LENGTH_MODULUS);
+		} catch(CryptoException e){
+			if (e.getReason() == CryptoException.ILLEGAL_USE){
+				redp[1] = 0x01;
+			}
+			else if (e.getReason() == CryptoException.INVALID_INIT){
+				redp[1] = 0x02;
+			}
+			else if (e.getReason() == CryptoException.ILLEGAL_VALUE){
+				redp[1] = 0x03;
+			}
+			else if (e.getReason() == CryptoException.UNINITIALIZED_KEY){
+				redp[1] = 0x04;
+			} else {
+				redp[1] = 0x0f;
+			}
+		}
+//		i2.to_byte_array(LENGTH_MODULUS, (short) (LENGTH_MESSAGE_DIGEST-LENGTH_MODULUS), tempBuffer, (short)0);
 		
 		/**
 		 *  Compute Q_A + V_pi * i
 		 */
-		multiplyECPoint(v_Pi, (short)0, tempBuffer, (short)0, LENGTH_MODULUS, tempBuffer, (short)0);
+		multiplyECPoint(v_Pi, (short)0, tempBuffer, (short)0, LENGTH_MODULUS, tempBuffer, (short)0); // V_pi * i
 		
-		Q_A.addPoint(tempBuffer, (short) 0, (short) EC_POINT_LENGTH);
-		short len = Q_A.getW(tempBuffer, (short) 0);
-		ecMultiply.init(ecPrivate);
+		nxpPointForAddition.addPoint(tempBuffer, (short) 0, (short) LENGTH_EC_POINT); // +Q_A
 		
 		/**
 		 * Multiply outcome with d_B --> S = (Q_A + V_pi * i) * d_B
 		 */
-		ecMultiply.generateSecret(tempBuffer, (short) 0, len, 
+		short len = nxpPointForAddition.getW(tempBuffer, (short) 0);
+		agreement.init(ecPrivate); // d_B
+		agreement.generateSecret(tempBuffer, (short) 0, len, 
 				tempBuffer, (short) (OUTPUT_OFFSET_S-1 )); 	// Store and use X coordinate at Location of S --> start one byte before to remove leading 0x04
 		
 		/**
@@ -401,15 +410,9 @@ public class UsmileKeyAgreement {
 				tempBuffer, (short) 0x00);
 
 		/**
-		 * reset secret value used for key agreement
+		 * Return Q_B, salt and IV
 		 */
-		//Util.arrayFillNonAtomic(tempBuffer, OFFSET_b, (short) 0x20, (byte) 0x00);
-
-		/**
-		 * Return Q_B + salt and IV
-		 */
-//		short len = ecPublic.getW(incomingBuf, (short) ISO7816.OFFSET_CLA);
-		len += getSalt_and_IV(incomingBuf, (short)(ISO7816.OFFSET_CLA + EC_POINT_LENGTH));
+		len += getSalt_and_IV(incomingBuf, (short)(ISO7816.OFFSET_CLA + LENGTH_EC_POINT));
 		apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len);
 		return true;
 	}
@@ -668,17 +671,8 @@ public class UsmileKeyAgreement {
 		}
 	}
 	private short multiplyECPoint(byte[] ecpoint, short ecpointoffset, byte[] multiplier, short mpoffset, short moduluslength, byte[] pointOutputBuffer, short offset){
-		ECPublicKey pointPublic = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, KeyBuilder.LENGTH_EC_FP_192, false);
-		ECPrivateKey pointPrivate = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_192, false);
-
-		initializeECPoint(pointPublic);
-		initializeECPoint(pointPrivate);
-		
-		KeyPair keyPair = new KeyPair(pointPublic,pointPrivate);
-		keyPair.genKeyPair();
-		
-		KeyAgreement agreement = KeyAgreementX.getInstance(KeyAgreementX.ALG_EC_SVDP_DH_PLAIN_XY, false);
 		pointPrivate.setS(multiplier, (short) mpoffset, moduluslength);
+		
 		agreement.init(pointPrivate);
 		return agreement.generateSecret(ecpoint, ecpointoffset, (short) (moduluslength*2+1), pointOutputBuffer, offset);
 	}
@@ -735,7 +729,7 @@ public class UsmileKeyAgreement {
 
 		// TODO Remove this, only for debugging
 		Util.arrayCopy(redp, (short)0, outArray,
-				(short) offset, EC_POINT_LENGTH);
+				(short) offset, LENGTH_EC_POINT);
 //		outArray[offset] = 0x01;
 		return LENGTH_SQUARE_MULT_MODULUS;
 	}
