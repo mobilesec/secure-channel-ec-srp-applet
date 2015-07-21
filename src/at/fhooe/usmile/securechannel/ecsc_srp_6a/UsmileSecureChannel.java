@@ -9,7 +9,6 @@ import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
 import javacard.framework.Util;
-import javacard.security.CryptoException;
 
 /**
  * @author Endalkachew Asnake
@@ -28,7 +27,6 @@ public class UsmileSecureChannel {
 	byte[] temp_outputBuf;
  
  	private static final byte INS_KEY_AGREEMENT_01 = 0x01;
-	private static final byte INS_KEY_AGREEMENT_02 = 0x02;
  	private static final byte INS_KEY_AGREEMENT_03 = 0x03;
  	
  	private static final byte INS_PASSWORD_CHANGE = 0x04;
