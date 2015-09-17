@@ -1,4 +1,4 @@
-package at.fhooe.usmile.securechannel.ecsc_srp_6a;
+package at.fhooe.usmile.securechannel.ecsc_srp;
 
 import javacard.framework.APDU;
 import javacard.framework.ISO7816;
