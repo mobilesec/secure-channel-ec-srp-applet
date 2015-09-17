@@ -131,12 +131,16 @@ public class UsmileKeyAgreement {
 
 		SRP5Utils.initializeECPoint(mNxpPointForECAddition);
 		SRP5Utils.initializeECPoint(mECMultiplHelperPrivatePoint);
-		
+
 		mECMultiplHelper = KeyAgreementX.getInstance(KeyAgreementX.ALG_EC_SVDP_DH_PLAIN_XY, false);
+//		mECTester = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DH, false);
 		
 		/**
 		 * Initialize EC Keys for Point addition (pub keys from alice and bob)
 		 */
+//		KeyPair test = new KeyPair(KeyPair.ALG_EC_FP,KeyBuilder.LENGTH_EC_FP_224);
+//		test.genKeyPair();
+		
 		mECKeyPairGenerator = new KeyPair(KeyPair.ALG_EC_FP,KeyBuilder.LENGTH_EC_FP_192);
 		mLocalECPrivateKey = (ECPrivateKey) mECKeyPairGenerator.getPrivate();
 		mLocalECPublicKey = ECPointBuilder.buildECPoint(ECPointBuilder.TYPE_EC_FP_POINT,KeyBuilder.LENGTH_EC_FP_192);
@@ -236,8 +240,11 @@ public class UsmileKeyAgreement {
 		/**
 		 * Generate public/private keys
 		 */
-		//Generate Private/Public key
+		//Generate new Private/Public key (d_B ad Q_B)
 		mECKeyPairGenerator.genKeyPair();
+		
+//		mECTester.init((ECPrivateKey)mECKeyPairGenerator.getPrivate());
+//		mECTester.generateSecret(incomingBuf, ISO7816.OFFSET_CDATA, apdu.getIncomingLength(), tempBuffer, (short)0x0);
 		
 		//Copy new public key values into NXP EC point (public parameter of Bob) 
 		short lenW = ((ECPublicKey)mECKeyPairGenerator.getPublic()).getW(tempBuffer, (short) 0x0);
@@ -378,8 +385,6 @@ public class UsmileKeyAgreement {
 	
 			
 			if (!isZero(tempBuffer, (short)0, LENGTH_MODULUS)){
-//				byte mu = (byte) (i1.getLastByte() & 0x01);
-				
 					if (Bignat.valueOf(LENGTH_MODULUS, (byte)3).same_value(mCurveQ)){
 						// TODO
 					} else { //TODO if (BigInteger.valueOf(3).compareTo(p) == -1){
@@ -401,7 +406,7 @@ public class UsmileKeyAgreement {
 			    			mRsaCipherForSquaring.doFinal(tempBuffer, (short) 0, (short) (LENGTH_SQUARE_MULT_MODULUS), tempBuffer, (short) 0);
 
 			    			/**
-				    		 * add A
+				    		 * add a
 				    		 */
 			    			if(add(tempBuffer, (short)0, LENGTH_MODULUS, CurveConstants.SecP192r1_A, 
 			    					(short)0, (short) CurveConstants.SecP192r1_A.length)){
@@ -411,7 +416,7 @@ public class UsmileKeyAgreement {
 	//			    		Util.arrayCopy(tempBuffer, (short)0, outarray, offset, LENGTH_MODULUS);
 
 							/**
-				    		 * (x^2 + A) * x
+				    		 * (x^2 + a) * x
 				    		 */
 			    			//Copy (x^2 + A) to position after padding
 				    		Util.arrayCopy(tempBuffer, (short) 0, tempBuffer, 
@@ -438,7 +443,7 @@ public class UsmileKeyAgreement {
 				    				(short) (LENGTH_SQUARE_MULT_MODULUS),LENGTH_SQUARE_MULT_MODULUS, (short) (LENGTH_SQUARE_MULT_MODULUS*2));
 
 				    		/**
-				    		 * (x^2 + A) * x + b
+				    		 * (x^2 + a) * x + b
 				    		 */
 				    		if(add(tempBuffer, (short)0, LENGTH_MODULUS, CurveConstants.SecP192r1_B, 
 				    				(short)0, (short) CurveConstants.SecP192r1_B.length)){
@@ -450,18 +455,19 @@ public class UsmileKeyAgreement {
 				    		// Copy alpha to buffer
 				    		Util.arrayCopy(tempBuffer, (short) (0), tempBuffer, 
 			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT*2), LENGTH_MODULUS );
+				    		
+				    		// Copy alpha to ??
 				    		Util.arrayCopy(tempBuffer, (short)0, tempBuffer, OUTPUT_OFFSET_S, LENGTH_MODULUS);
+				    		
 				    		tempBuffer[OUTPUT_OFFSET_S] = 0x01;
+				    		
 				    		// Fill padding with zeros
 				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
 			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT*2), (byte) 0 );
 				    		
-				    		// Fill second area with zeros
-	//			    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_SQUARE_MULT_MODULUS), 
-	//		    					(short) (LENGTH_SQUARE_MULT_MODULUS), (byte) 0 );
-				    		
 				    		findSquareRoot(k, tempBuffer, (short)(0), 
 				    				LENGTH_SQUARE_MULT_MODULUS, tempBuffer, (short)(LENGTH_PADDING_FOR_SQUARE_MULT));
+				    		
 				    		Util.arrayCopy(tempBuffer, (short)LENGTH_PADDING_FOR_SQUARE_MULT, outarray, (short) (offset+LENGTH_MODULUS), LENGTH_MODULUS);
 				    		
 				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
@@ -472,7 +478,20 @@ public class UsmileKeyAgreement {
 				    		mRsaCipherForSquaring.doFinal(tempBuffer, (short) 0, LENGTH_SQUARE_MULT_MODULUS, tempBuffer, (short) 0);
 
 				    		if(Util.arrayCompare(tempBuffer, (short) 0, tempBuffer, LENGTH_SQUARE_MULT_MODULUS, LENGTH_MODULUS) == 0){
-					    		outputElength = LENGTH_MODULUS;
+								byte mu = (byte) (i1.getLastByte() & 0x01);
+								
+								if(mu == 1) { // negate
+									Util.arrayCopy(CurveConstants.SecP192r1_P, (short)0, tempBuffer, (short) (0), LENGTH_MODULUS);
+						    		if(subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, outarray,
+						    				(short) (offset+LENGTH_MODULUS), LENGTH_MODULUS)) {
+						    			add(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.SecP192r1_P_ForRSA,
+						    					(short) 0, LENGTH_MODULUS);
+						    		}
+						    		
+									Util.arrayCopy(tempBuffer, (short)0, outarray, (short) (offset+LENGTH_MODULUS), LENGTH_MODULUS);
+								}
+								 
+								outputElength = LENGTH_MODULUS;
 				    		} else {
 				    			i1.add(Bignat.valueOf((byte) 1, (byte) 1));
 				    			counter++;
