@@ -155,9 +155,7 @@ public class UsmileKeyAgreement {
 		mRsaPublicKeyModPow.setModulus(CurveConstants.P_forRSAOperation, (short) 0x00, (short) 0x40);
 
 		/**
-		 * v and KV are should be computed here from SRP 6a v = g^X X = H (salt,
-		 * H(identity':'password)) .... from bouncy castle SRP 6a API K = H(N,
-		 * g) ... g.. padded with leading 0s
+		 * Initialize static values for key agreement
 		 */
 		mV_Pi = new byte[(short) LENGTH_EC_POINT];
 		mREDP = new byte[(short) LENGTH_EC_POINT];
@@ -194,7 +192,7 @@ public class UsmileKeyAgreement {
 
 	/**
 	 * Computes/generates Applet side parameters that are static (session
-	 * independent) This values are salt, k and kv Called during from the
+	 * independent). This values are salt, V_pi and U_pi. Called during from the
 	 * constructor of this class (at Applet installation) and for changing the
 	 * secure channel password and/or user ID
 	 */
@@ -205,7 +203,7 @@ public class UsmileKeyAgreement {
 		mSaltGenerator.generateData(mSalt, (short) 0x00, LENGTH_SALT);
 
 		/**
-		 * compute U_Pi = OS2IP(H (salt, H(identity':'password))) mod r
+		 * compute U_Pi = OS2IP(H (salt, H(identity':'password))) mod N
 		 */
 		mUsedMsgDigest.doFinal(tempBuffer, (short) 0x00, length, tempBuffer,
 				OUTPUT_OFFSET_2);
@@ -254,7 +252,7 @@ public class UsmileKeyAgreement {
 		tempBuffer[OUTPUT_OFFSET_S] = (byte)0x01;
 		
 		// Compute random point
-		short redpLength = Redp1(k, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1), mREDP, (short) (1));
+		short redpLength = Redp1(tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1), mREDP, (short) (1));
 		mREDP[0] = 0x04;
 		
 		// Could not compute random point, return an error
@@ -265,15 +263,15 @@ public class UsmileKeyAgreement {
 
 
 	/**
-	 * Initializes SRP-6a key agreement
+	 * Initializes EC-SRP key agreement
 	 * 
 	 * @param apdu
 	 *            reference for the APDU object used by this Applet
 	 * @param incomingBuf
 	 *            reference to the APDU buffer that contains the client public
-	 *            key A
+	 *            key Q_A
 	 * @return true if key agreement initialization completes successfully.
-	 *         false if the client public A is zero
+	 *         false if it fails
 	 */
 	public boolean initWithSRP(APDU apdu, byte[] incomingBuf) {
 		/**
@@ -372,7 +370,16 @@ public class UsmileKeyAgreement {
 		return multiplyGeneratorPoint(dstbuffer, offset, uPiSrc, uPiOffset, length);
 	}
 
-	public short Redp1(Bignat k, byte[] oPi, short offset, short length, byte[] pointOutput, short outoffset) {
+	/**
+	 * Compute the Pseudo-random EC point from the password derived hash-string o_Pi
+	 * @param oPi Password derived hash string 
+	 * @param offset Offset of oPi in the byte array
+	 * @param length Length of oPi
+	 * @param pointOutput Output buffer for the EC point
+	 * @param outoffset Output offset
+	 * @return Length of the EC point (0 if no point could be computed)
+	 */
+	public short Redp1(byte[] oPi, short offset, short length, byte[] pointOutput, short outoffset) {
 		byte[] o1 = new byte[LENGTH_MESSAGE_DIGEST];
 		mUsedMsgDigest.doFinal(oPi, offset, length,
 				o1, (short) 0x00);
@@ -381,10 +388,219 @@ public class UsmileKeyAgreement {
 		Bignat i1 = new Bignat(LENGTH_MESSAGE_DIGEST, false);
 		i1.from_byte_array(LENGTH_MESSAGE_DIGEST, (short) 0, o1, (short)0x0);
 
-		short outputLen = computeRandomPoint(k, i1, pointOutput, outoffset, (byte)0);
+		short outputLen = computeRandomPoint(i1, pointOutput, outoffset);
 		return outputLen;
 	}
 
+
+	/**
+	 * Compute the pseudo-random EC point from the integer representation of o_Pi (--> i1). 
+	 * i1 will be increased until a pseudo random point was found or MAX_INCREASE was reached.
+	 * @param i1 Integer representation of o_Pi
+	 * @param outarray Output array buffer
+	 * @param offset Offset of output array
+	 * @return Length of the output EC point
+	 */
+	private short computeRandomPoint(Bignat i1, byte[] outarray,  short offset) {
+		byte[] o2 = null;
+		byte[] o3 = new byte[LENGTH_MESSAGE_DIGEST];
+		short outputElength = 0;
+		byte counter = 0; 
+		
+		// Try to find a random EC point
+		while(counter < REDP_MAX_INCREASE && outputElength == 0) {
+			Util.arrayFillNonAtomic(o3, (short) 0, LENGTH_MESSAGE_DIGEST, (byte) 0);
+			Util.arrayFillNonAtomic(tempBuffer, (short) 0, (short)(LENGTH_RSAOBJECT_MODULUS *2), (byte) 0);
+			
+			o2 = getPadded(i1.as_byte_array(),(short)0,i1.length(), LENGTH_MESSAGE_DIGEST);
+			mUsedMsgDigest.doFinal(o2, (short) 0, LENGTH_MESSAGE_DIGEST,
+					o3, (short) 0x00);
+			moduloP(o3,(short)0);
+			
+			Util.arrayFillNonAtomic(outarray, (short) (offset), (short) (LENGTH_MODULUS*2), (byte) 0 );
+			Util.arrayCopy(tempBuffer, (short) (0), outarray, offset, LENGTH_MODULUS);
+	
+			
+			if (!isZero(tempBuffer, (short)0, LENGTH_MODULUS)){
+					if (Bignat.valueOf(LENGTH_MODULUS, (byte)3).same_value(mCurveP)){
+						// TODO check if this case can actually occur
+					} else { 
+						//p is greater than 3
+	
+			    		try{
+				    		/**
+				    		 * compute x^2
+				    		 */
+			    			mRsaCipherForSquaring.init(mRsaPublicKekForSquare, Cipher.MODE_ENCRYPT);
+			    			// Copy x to fill temporary buffer of size SQUARE_MULTIPLICATION_MODULUS with zeros
+			    			Util.arrayCopy(tempBuffer, (short) (0), tempBuffer, 
+			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT), 
+			    					LENGTH_MODULUS );
+			    			// Put padding before and after x (e.g. [20 B] | x | [20 B])
+			    			Util.arrayFillNonAtomic(tempBuffer, (short) (0), (short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
+			    			Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_MODULUS+LENGTH_PADDING_FOR_SQUARE_MULT), (short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
+			    			
+			    			mRsaCipherForSquaring.doFinal(tempBuffer, (short) 0, (short) (LENGTH_RSAOBJECT_MODULUS), tempBuffer, (short) 0);
+
+			    			/**
+				    		 * add a
+				    		 */
+			    			if(Bignat.add(tempBuffer, (short)0, LENGTH_MODULUS, CurveConstants.A, 
+			    					(short)0, (short) CurveConstants.A.length)){
+			    				Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P_forRSAOperation,
+				    					(short) 0, LENGTH_MODULUS);
+				    		}
+
+							/**
+				    		 * (x^2 + a) * x
+				    		 */
+			    			//Copy (x^2 + A) to position after padding
+				    		Util.arrayCopy(tempBuffer, (short) 0, tempBuffer, 
+			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS );
+	
+				    		// Fill padding with zeros
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
+			    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
+				    		// Fill trailing bytes with zeros
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_PADDING_FOR_SQUARE_MULT + LENGTH_MODULUS), 
+			    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
+				    		
+			    			// Fill padding bytes with zeros
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_RSAOBJECT_MODULUS), 
+			    					(short) LENGTH_RSAOBJECT_MODULUS, (byte) 0 );
+				    		
+				    		// copy x after the current temporary buffer location
+			    			Util.arrayCopy(outarray, offset, tempBuffer, 
+			    					(byte) (LENGTH_RSAOBJECT_MODULUS+LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS );
+	
+			    			// Multiply current value (x^2 + A) with x
+				    		modMultiply(tempBuffer, (short)0, (short) (LENGTH_RSAOBJECT_MODULUS), 
+				    				tempBuffer, 
+				    				(short) (LENGTH_RSAOBJECT_MODULUS),LENGTH_RSAOBJECT_MODULUS, (short) (LENGTH_RSAOBJECT_MODULUS*2));
+
+				    		/**
+				    		 * (x^2 + a) * x + b
+				    		 */
+				    		if(Bignat.add(tempBuffer, (short)0, LENGTH_MODULUS, CurveConstants.B, 
+				    				(short)0, (short) CurveConstants.B.length)){
+				    			Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P,
+				    					(short) 0, LENGTH_MODULUS);
+				    		}
+				    		Util.arrayCopy(tempBuffer, (short)0, tempBuffer, LENGTH_RSAOBJECT_MODULUS, LENGTH_MODULUS);
+				    		
+				    		// Copy alpha to buffer
+				    		Util.arrayCopy(tempBuffer, (short) (0), tempBuffer, 
+			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT*2), LENGTH_MODULUS );
+				    						    		
+				    		// Fill padding with zeros
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
+			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT*2), (byte) 0 );
+				    		
+				    		findSquareRoot(tempBuffer, (short)(0), 
+				    				LENGTH_RSAOBJECT_MODULUS, tempBuffer, (short)(LENGTH_PADDING_FOR_SQUARE_MULT));
+				    		
+				    		Util.arrayCopy(tempBuffer, (short)LENGTH_PADDING_FOR_SQUARE_MULT, outarray, (short) (offset+LENGTH_MODULUS), LENGTH_MODULUS);
+				    		
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
+			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT), (byte) 0 );
+				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_PADDING_FOR_SQUARE_MULT+LENGTH_MODULUS), 
+			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT), (byte) 0 );
+				    		
+				    		mRsaCipherForSquaring.doFinal(tempBuffer, (short) 0, LENGTH_RSAOBJECT_MODULUS, tempBuffer, (short) 0);
+
+				    		if(Util.arrayCompare(tempBuffer, (short) 0, tempBuffer, LENGTH_RSAOBJECT_MODULUS, LENGTH_MODULUS) == 0){
+								byte mu = (byte) (i1.getLastByte() & 0x01);
+								
+								if(mu == 1) { // negate
+									Util.arrayCopy(CurveConstants.P, (short)0, tempBuffer, (short) (0), LENGTH_MODULUS);
+						    		if(Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, outarray,
+						    				(short) (offset+LENGTH_MODULUS), LENGTH_MODULUS)) {
+						    			Bignat.add(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P,
+						    					(short) 0, LENGTH_MODULUS);
+						    		}
+									// TODO EC point multiply with cofactor H !
+
+									Util.arrayCopy(tempBuffer, (short)0, outarray, (short) (offset+LENGTH_MODULUS), LENGTH_MODULUS);
+								} 
+
+								outputElength = LENGTH_MODULUS;
+				    		} else {
+				    			i1.add(Bignat.valueOf((byte) 1, (byte) 1));
+				    			counter++;
+				    		}
+			    		} catch(CryptoException e){
+			    			if (e.getReason() == CryptoException.ILLEGAL_USE){
+			    				outarray[offset] = 0x01;
+			    			}
+			    			else if (e.getReason() == CryptoException.INVALID_INIT){
+			    				outarray[offset] = 0x02;
+			    			}
+			    			else if (e.getReason() == CryptoException.ILLEGAL_VALUE){
+			    				outarray[offset] = 0x03;
+			    			}
+			    			else if (e.getReason() == CryptoException.UNINITIALIZED_KEY){
+			    				outarray[offset] = 0x04;
+			    			} else {
+			    				outarray[offset] = 0x0f;
+			    			}
+							outputElength = 0x01;
+			    		}
+				}
+			} else { // isZero
+				outputElength = 0;
+			}
+		}
+
+		return outputElength;
+	}
+
+
+	/**
+	 * Find the modular square root of a given large integer on the EC. 
+	 * @param alpha
+	 * @param offset
+	 * @param length
+	 * @param out
+	 * @param outoffset
+	 */
+	private void findSquareRoot(byte[] alpha, short offset, short length, byte[] out, short outoffset) {
+		Bignat helper = new Bignat((short) LENGTH_RSAOBJECT_MODULUS, false);
+
+		byte bHelper = (byte) (mCurveP.getLastByte() & 0x03); // mod 4
+		if(bHelper == (byte)3 ){ //p = 3 mod 4
+			mRsaCipherModPow.init(mRsaPublicKeyModPow, Cipher.MODE_ENCRYPT);
+			mRsaCipherModPow.doFinal(alpha, offset, length, alpha, offset);
+
+			// TODO can we improve this?
+			helper.from_byte_array(LENGTH_RSAOBJECT_MODULUS, (short)0, alpha, offset);
+			helper.remainder_divide(mCurveP, null);
+			helper.to_byte_array(LENGTH_RSAOBJECT_MODULUS, (short)(LENGTH_PADDING_FOR_SQUARE_MULT*2), out, outoffset);
+		} else { 
+			bHelper = (byte) (mCurveP.getLastByte() & 0x07); // mod 8
+			
+			// TODO perform more checks and test if it is working
+			if(bHelper == (byte)5){ // p = 8 mod 5
+				// TODO test if this is working
+//				BigInteger k = p.subtract(BigInteger.valueOf(5)).divide(BigInteger.valueOf(8));
+//				BigInteger gamma = alpha.multiply(BigInteger.valueOf(2)).modPow(k, p);
+//				BigInteger i = alpha.multiply(BigInteger.valueOf(2)).multiply(gamma.pow(2)).mod(p);
+//				beta = alpha.multiply(gamma).multiply(i.subtract(ONE)).mod(p);
+			} else if(bHelper == (byte)1){
+				// TODO
+			} else {
+				// TODO error handling
+			}
+		}
+	}
+
+	/**
+	 * Get padded byte array. Returns the same array if the new length is smaller or equal the old length
+	 * @param n Large integer which should be padded
+	 * @param offset Offset of the large integer 
+	 * @param arrayLength Length of the current integer
+	 * @param newlength New (padded) length of the large integer
+	 * @return A new (or the same) byte array with padding. 
+	 */
 	private static byte[] getPadded(byte[] n, short offset, short arrayLength, short newlength) {
 		byte[] bs = n;
 		if (arrayLength < newlength) {
@@ -395,6 +611,12 @@ public class UsmileKeyAgreement {
 		return bs;
 	}
 	
+	/**
+	 * Compute the modulus of a large integer with P (EC curve polynomial representation). 
+	 * Used modular multiplication of the big integer with the value one.    
+	 * @param data Data from which the modulos should be computed
+	 * @param dataoffset Offset of data
+	 */
 	private void moduloP(byte[] data, short dataoffset){
 		Util.arrayCopy(data, dataoffset, tempBuffer, 
 				(short)(LENGTH_PADDING_FOR_SQUARE_MULT-(LENGTH_MESSAGE_DIGEST-LENGTH_MODULUS)), 
@@ -407,6 +629,22 @@ public class UsmileKeyAgreement {
 		modMultiply(tempBuffer, (short)0, LENGTH_RSAOBJECT_MODULUS, 
 				tempBuffer, LENGTH_RSAOBJECT_MODULUS, LENGTH_RSAOBJECT_MODULUS, 
 				(short) (LENGTH_RSAOBJECT_MODULUS*2));
+	}
+
+	/**
+	 * Check if the byte array is zero
+	 * @param tempBuffer
+	 * @param offset
+	 * @param length
+	 * @return
+	 */
+	private boolean isZero(byte[] tempBuffer, short offset, short length) {
+		for (short i=0; i<= length;i++) {
+			if(tempBuffer[(short)(offset + i)] != (short) 0x00) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -478,204 +716,19 @@ public class UsmileKeyAgreement {
 		 */
 
 		Bignat.modular_division_by_2(x, xOffset, LENGTH_MODULUS, CurveConstants.P, (short) 0, CurveConstants.MODULUS_SIZE);
-
-	}
-
-	private short computeRandomPoint(Bignat k, Bignat i1, byte[] outarray,  short offset, byte counter) {
-		byte[] o2 = null;
-		byte[] o3 = new byte[LENGTH_MESSAGE_DIGEST];
-		short outputElength = 0;
-		
-		// Try to find a random EC point
-		while(counter < REDP_MAX_INCREASE && outputElength == 0) {
-			Util.arrayFillNonAtomic(o3, (short) 0, LENGTH_MESSAGE_DIGEST, (byte) 0);
-			Util.arrayFillNonAtomic(tempBuffer, (short) 0, (short)(LENGTH_RSAOBJECT_MODULUS *2), (byte) 0);
-			
-			o2 = getPadded(i1.as_byte_array(),(short)0,i1.length(), LENGTH_MESSAGE_DIGEST);
-			mUsedMsgDigest.doFinal(o2, (short) 0, LENGTH_MESSAGE_DIGEST,
-					o3, (short) 0x00);
-			moduloP(o3,(short)0);
-			
-			Util.arrayFillNonAtomic(outarray, (short) (offset), (short) (LENGTH_MODULUS*2), (byte) 0 );
-			Util.arrayCopy(tempBuffer, (short) (0), outarray, offset, LENGTH_MODULUS);
-	
-			
-			if (!isZero(tempBuffer, (short)0, LENGTH_MODULUS)){
-					if (Bignat.valueOf(LENGTH_MODULUS, (byte)3).same_value(mCurveP)){
-						// TODO 
-					} else { //TODO if (BigInteger.valueOf(3).compareTo(p) == -1){
-						//p is greater than 3
-	
-			    		try{
-				    		/**
-				    		 * compute x^2
-				    		 */
-			    			mRsaCipherForSquaring.init(mRsaPublicKekForSquare, Cipher.MODE_ENCRYPT);
-			    			// Copy x to fill temporary buffer of size SQUARE_MULTIPLICATION_MODULUS with zeros
-			    			Util.arrayCopy(tempBuffer, (short) (0), tempBuffer, 
-			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT), 
-			    					LENGTH_MODULUS );
-			    			// Put padding before and after x (e.g. [20 B] | x | [20 B])
-			    			Util.arrayFillNonAtomic(tempBuffer, (short) (0), (short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
-			    			Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_MODULUS+LENGTH_PADDING_FOR_SQUARE_MULT), (short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
-			    			
-			    			mRsaCipherForSquaring.doFinal(tempBuffer, (short) 0, (short) (LENGTH_RSAOBJECT_MODULUS), tempBuffer, (short) 0);
-
-			    			/**
-				    		 * add a
-				    		 */
-			    			if(Bignat.add(tempBuffer, (short)0, LENGTH_MODULUS, CurveConstants.A, 
-			    					(short)0, (short) CurveConstants.A.length)){
-			    				Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P_forRSAOperation,
-				    					(short) 0, LENGTH_MODULUS);
-				    		}
-
-							/**
-				    		 * (x^2 + a) * x
-				    		 */
-			    			//Copy (x^2 + A) to position after padding
-				    		Util.arrayCopy(tempBuffer, (short) 0, tempBuffer, 
-			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS );
-	
-				    		// Fill padding with zeros
-				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
-			    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
-				    		// Fill trailing bytes with zeros
-				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_PADDING_FOR_SQUARE_MULT + LENGTH_MODULUS), 
-			    					(short) LENGTH_PADDING_FOR_SQUARE_MULT, (byte) 0 );
-				    		
-			    			// Fill padding bytes with zeros
-				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_RSAOBJECT_MODULUS), 
-			    					(short) LENGTH_RSAOBJECT_MODULUS, (byte) 0 );
-				    		
-				    		// copy x after the current temporary buffer location
-			    			Util.arrayCopy(outarray, offset, tempBuffer, 
-			    					(byte) (LENGTH_RSAOBJECT_MODULUS+LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS );
-	
-			    			// Multiply current value (x^2 + A) with x
-				    		modMultiply(tempBuffer, (short)0, (short) (LENGTH_RSAOBJECT_MODULUS), 
-				    				tempBuffer, 
-				    				(short) (LENGTH_RSAOBJECT_MODULUS),LENGTH_RSAOBJECT_MODULUS, (short) (LENGTH_RSAOBJECT_MODULUS*2));
-
-				    		/**
-				    		 * (x^2 + a) * x + b
-				    		 */
-				    		if(Bignat.add(tempBuffer, (short)0, LENGTH_MODULUS, CurveConstants.B, 
-				    				(short)0, (short) CurveConstants.B.length)){
-				    			Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P,
-				    					(short) 0, LENGTH_MODULUS);
-				    		}
-				    		Util.arrayCopy(tempBuffer, (short)0, tempBuffer, LENGTH_RSAOBJECT_MODULUS, LENGTH_MODULUS);
-				    		
-				    		// Copy alpha to buffer
-				    		Util.arrayCopy(tempBuffer, (short) (0), tempBuffer, 
-			    					(byte) (LENGTH_PADDING_FOR_SQUARE_MULT*2), LENGTH_MODULUS );
-				    		
-				    		// Copy alpha to ??
-//				    		Util.arrayCopy(tempBuffer, (short)0, tempBuffer, OUTPUT_OFFSET_S, LENGTH_MODULUS);
-//				    		
-//				    		tempBuffer[OUTPUT_OFFSET_S] = 0x01;
-				    		
-				    		// Fill padding with zeros
-				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
-			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT*2), (byte) 0 );
-				    		
-				    		findSquareRoot(k, tempBuffer, (short)(0), 
-				    				LENGTH_RSAOBJECT_MODULUS, tempBuffer, (short)(LENGTH_PADDING_FOR_SQUARE_MULT));
-				    		
-				    		Util.arrayCopy(tempBuffer, (short)LENGTH_PADDING_FOR_SQUARE_MULT, outarray, (short) (offset+LENGTH_MODULUS), LENGTH_MODULUS);
-				    		
-				    		Util.arrayFillNonAtomic(tempBuffer, (short) (0), 
-			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT), (byte) 0 );
-				    		Util.arrayFillNonAtomic(tempBuffer, (short) (LENGTH_PADDING_FOR_SQUARE_MULT+LENGTH_MODULUS), 
-			    					(short) (LENGTH_PADDING_FOR_SQUARE_MULT), (byte) 0 );
-				    		
-				    		mRsaCipherForSquaring.doFinal(tempBuffer, (short) 0, LENGTH_RSAOBJECT_MODULUS, tempBuffer, (short) 0);
-
-				    		if(Util.arrayCompare(tempBuffer, (short) 0, tempBuffer, LENGTH_RSAOBJECT_MODULUS, LENGTH_MODULUS) == 0){
-								byte mu = (byte) (i1.getLastByte() & 0x01);
-								
-								if(mu == 1) { // negate
-									Util.arrayCopy(CurveConstants.P, (short)0, tempBuffer, (short) (0), LENGTH_MODULUS);
-						    		if(Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, outarray,
-						    				(short) (offset+LENGTH_MODULUS), LENGTH_MODULUS)) {
-						    			Bignat.add(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P,
-						    					(short) 0, LENGTH_MODULUS);
-						    		}
-									// TODO EC point multiply with cofactor H !
-
-									Util.arrayCopy(tempBuffer, (short)0, outarray, (short) (offset+LENGTH_MODULUS), LENGTH_MODULUS);
-								} 
-
-								outputElength = LENGTH_MODULUS;
-				    		} else {
-				    			i1.add(Bignat.valueOf((byte) 1, (byte) 1));
-				    			counter++;
-				    		}
-			    		} catch(CryptoException e){
-			    			if (e.getReason() == CryptoException.ILLEGAL_USE){
-			    				outarray[offset] = 0x01;
-			    			}
-			    			else if (e.getReason() == CryptoException.INVALID_INIT){
-			    				outarray[offset] = 0x02;
-			    			}
-			    			else if (e.getReason() == CryptoException.ILLEGAL_VALUE){
-			    				outarray[offset] = 0x03;
-			    			}
-			    			else if (e.getReason() == CryptoException.UNINITIALIZED_KEY){
-			    				outarray[offset] = 0x04;
-			    			} else {
-			    				outarray[offset] = 0x0f;
-			    			}
-							outputElength = 0x01;
-			    		}
-				}
-			} else { // isZero
-				outputElength = -1;
-			}
-		}
-
-		return outputElength;
 	}
 	
-
-	private boolean isZero(byte[] tempBuffer, short offset, short length) {
-		for (short i=0; i<= length;i++) {
-			if(tempBuffer[(short)(offset + i)] != (short) 0x00) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	private void findSquareRoot(Bignat k, byte[] alpha, short offset, short length, byte[] out, short outoffset) {
-		Bignat helper = new Bignat((short) LENGTH_RSAOBJECT_MODULUS, false);
-		Bignat remainder= new Bignat((short) LENGTH_MODULUS, false);
-		
-
-		byte t = (byte) (mCurveP.getLastByte() & 0x03); // mod 4
-		if(t == (byte)3 ){ //p = 3 mod 4
-			mRsaCipherModPow.init(mRsaPublicKeyModPow, Cipher.MODE_ENCRYPT);
-			mRsaCipherModPow.doFinal(alpha, offset, length, alpha, offset);
-
-			// TODO can we improve this?
-			helper.from_byte_array(LENGTH_RSAOBJECT_MODULUS, (short)0, alpha, offset);
-			helper.remainder_divide(mCurveP, null);
-			helper.to_byte_array(LENGTH_RSAOBJECT_MODULUS, (short)(LENGTH_PADDING_FOR_SQUARE_MULT*2), out, outoffset);
-		} else { 
-
-			// TODO perform more checks
-			if(remainder.getLastByte() == (byte)5){ // p = 8 mod 5
-				// TODO
-//				BigInteger k = p.subtract(BigInteger.valueOf(5)).divide(BigInteger.valueOf(8));
-//				BigInteger gamma = alpha.multiply(BigInteger.valueOf(2)).modPow(k, p);
-//				BigInteger i = alpha.multiply(BigInteger.valueOf(2)).multiply(gamma.pow(2)).mod(p);
-//				beta = alpha.multiply(gamma).multiply(i.subtract(ONE)).mod(p);
-			} else if(remainder.getLastByte() == (byte)1){
-				// TODO
-			}
-		}
-	}
+	/**
+	 * Multiply an EC point with any large integer. Uses the Key Agreement API of Java card.
+	 * @param ecpoint The point which should be multiplied
+	 * @param ecpointoffset Offset of the point in the byte array
+	 * @param multiplier Large integer for multiplication
+	 * @param mpoffset Offset of the large integer
+	 * @param moduluslength Length of the integer
+	 * @param pointOutputBuffer Output buffer
+	 * @param offset Offset of the output buffer
+	 * @return Length of the final EC point
+	 */
 	private short multiplyECPoint(byte[] ecpoint, short ecpointoffset, byte[] multiplier, short mpoffset, short moduluslength, byte[] pointOutputBuffer, short offset){
 		mECMultiplHelperPrivatePoint.setS(multiplier, (short) mpoffset, moduluslength);
 		
@@ -683,6 +736,15 @@ public class UsmileKeyAgreement {
 		return mECMultiplHelper.generateSecret(ecpoint, ecpointoffset, (short) (moduluslength*2+1), pointOutputBuffer, offset);
 	}
 
+	/**
+	 * Multiply a large integer with the used EC generator point G. Uses the Key Agreement API of Java card
+	 * @param pointOutputBuffer Outputbuffer byte array
+	 * @param offset Offset in output array
+	 * @param multiplier Large integer for multiplication with EC point
+	 * @param mpoffset Offset of large integer 
+	 * @param mplength Length of the multiplier
+	 * @return Length of final EC point
+	 */
 	private short multiplyGeneratorPoint(byte[] pointOutputBuffer, short offset, byte[] multiplier, short mpoffset, short mplength){
 		return multiplyECPoint(CurveConstants.G, (short) (0), 
 				multiplier, mpoffset, mplength, pointOutputBuffer, offset);
@@ -776,6 +838,5 @@ public class UsmileKeyAgreement {
 			return false;
 		}
 	}
-
 
 }
