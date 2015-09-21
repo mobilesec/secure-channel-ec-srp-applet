@@ -45,10 +45,6 @@ public class TestECSecureChannel extends Applet {
 			 		usChannel.encodeAndSend(apdu, incomingBuf, ISO7816.OFFSET_CDATA, (short)(incomingBuf[ISO7816.OFFSET_LC] & 0x00FF));
 				}
 			}
-			
-	
 		}
-		
 	}
-
 }

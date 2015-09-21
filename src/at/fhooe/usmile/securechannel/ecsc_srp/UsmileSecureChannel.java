@@ -27,16 +27,13 @@ public class UsmileSecureChannel {
 	byte[] temp_outputBuf;
  
  	private static final byte INS_KEY_AGREEMENT_01 = 0x01;
- 	private static final byte INS_KEY_AGREEMENT_03 = 0x03;
+ 	private static final byte INS_KEY_AGREEMENT_02 = 0x03;
  	
  	private static final byte INS_PASSWORD_CHANGE = 0x04;
 	
 	private static final byte MAX_PASSWORD_TRY_LIMIT = 0x05;
 	
-	// TODO remove again
-	private static final byte INS_KEY_AGREEMENT_READ = 0x10;
- 	
-	private static final byte[] sw_ok = new byte[]{(byte)0x90, 0x00};
+	private static final byte[] SW_OK = new byte[]{(byte)0x90, 0x00};
 	
 	private static final  short SW_BLOCKED = 0x0100;
 	//private static final  short SW_FAILED = 0x0110;
@@ -111,17 +108,13 @@ public class UsmileSecureChannel {
 					currentStage[(short) 0x00] = 0x01;
 				}
 				break; 
-//			case INS_KEY_AGREEMENT_02:
-//				short len_salt_iv = usmileKeyAgreement.getSalt_and_IV(incomingBuf, ISO7816.OFFSET_CLA);
-//				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_salt_iv);
-//				break;
 
-			case INS_KEY_AGREEMENT_READ:
-				short len_output = usmileKeyAgreement.getOutputValue(incomingBuf, ISO7816.OFFSET_CLA);
-				apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len_output);
-				break;
- 
-			case INS_KEY_AGREEMENT_03:
+			case 0x10: 
+				short len1 = usmileKeyAgreement.getOutput(incomingBuf,ISO7816.OFFSET_CDATA);
+				apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA,len1);
+				break; 
+				
+			case INS_KEY_AGREEMENT_02:
 				if (currentStage[(short) 0x00] == 0x01) {
 					 connectionTries++;
 				  
@@ -204,7 +197,7 @@ public class UsmileSecureChannel {
 	 */
 	public void encodeAndSend(APDU apdu, byte[] incomingBuffer, short offset, short length) {
 		// byte[] buf = apdu.getBuffer();
- 		short len = usmileSecureMessaging.wrapApdu(incomingBuffer, offset, length, sw_ok, incomingBuffer, (short) 0x00) ; 			 
+ 		short len = usmileSecureMessaging.wrapApdu(incomingBuffer, offset, length, SW_OK, incomingBuffer, (short) 0x00) ; 			 
 		apdu.setOutgoingAndSend((short) 0x00, len);
 	}
 

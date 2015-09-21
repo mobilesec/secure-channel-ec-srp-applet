@@ -245,52 +245,75 @@ public class Bignat {
 	}
 
 	/**
+	 * Addition of big integer x and y specified by offset and length the result
+	 * is saved in x
 	 * 
-	 * Subtraction. Subtract {@code other} from {@code this} and store the
-	 * result in {@code this}. If an overflow occurs the return value is true
-	 * and the value of this is the correct negative result in two's complement.
-	 * If there is no overflow the return value is false.
-	 * <P>
-	 * 
-	 * It would be more natural to report the overflow with an
-	 * {@link javacard.framework.UserException}, however its
-	 * {@link javacard.framework.UserException#throwIt throwIt} method dies with
-	 * a null pointer exception when it runs in a host test frame...
-	 * <P>
-	 * 
-	 * No size constraints, in particular, {@code other} can be longer than
-	 * {@code this}. However, if {@code other} is longer than {@code this} the
-	 * additional digits of {@code other} are asserted to be zero. Without
-	 * assertion checks these additional digits of {@code other} are ignored and
-	 * the method silently returns a wrong result.
-	 * 
-	 * @param other
-	 *            value to subtract from this
-	 * @return true if an overflow occurs, false otherwise
+	 * @param x
+	 * @param xOffset
+	 * @param xLength
+	 * @param y
+	 * @param yOffset
+	 * @param yLength
+	 * @return
 	 */
-	public boolean subtract(Bignat other) {
-		short i, j;
+	public static boolean add(byte[] x, short xOffset, short xLength, byte[] y,
+			short yOffset, short yLength) {
+		short digit_mask = 0xff;
+		short digit_len = 0x08;
+		short result = 0;
+		short i = (short) (xLength + xOffset - 1);
+		short j = (short) (yLength + yOffset - 1);
 
-		short subtraction_result = 0;
+		for (; i >= xOffset; i--, j--) {
+			result = (short) (result + (short) (x[i] & digit_mask) + (short) (y[j] & digit_mask));
+
+			x[i] = (byte) (result & digit_mask);
+			result = (short) ((result >> digit_len) & digit_mask);
+		}
+		while (result > 0 && i >= xOffset) {
+			result = (short) (result + (short) (x[i] & digit_mask));
+			x[i] = (byte) (result & digit_mask);
+			result = (short) ((result >> digit_len) & digit_mask);
+			i--;
+		}
+
+		return result != 0;
+	}
+
+	/**
+	 * subtracts big integer y from x specified by offset and length the result
+	 * is saved in x
+	 * 
+	 * @param x
+	 * @param xOffset
+	 * @param xLength
+	 * @param y
+	 * @param yOffset
+	 * @param yLength
+	 * @return
+	 */
+	public static boolean subtract(byte[] x, short xOffset, short xLength, byte[] y,
+			short yOffset, short yLength) {
+		short digit_mask = 0xff;
+		short i = (short) (xLength + xOffset - 1);
+		short j = (short) (yLength + yOffset - 1);
 		short carry = 0;
+		short subtraction_result = 0;
 
-		i = (short) (this.size - 1);
-		j = (short) (other.size - 1);
-		for (; i >= 0 && j >= 0; i--, j--) {
-			subtraction_result = (short) ((this.value[i] & digit_mask)
-					- (other.value[j] & digit_mask) - carry);
-			this.value[i] = (byte) (subtraction_result & digit_mask);
+		for (; i >= xOffset && j >= yOffset; i--, j--) {
+			subtraction_result = (short) ((x[i] & digit_mask)
+					- (y[j] & digit_mask) - carry);
+			x[i] = (byte) (subtraction_result & digit_mask);
 			carry = (short) (subtraction_result < 0 ? 1 : 0);
 		}
-		for (; i >= 0 && carry > 0; i--) {
-			if (this.value[i] != 0)
+		for (; i >= xOffset && carry > 0; i--) {
+			if (x[i] != 0)
 				carry = 0;
-			this.value[i] -= 1;
+			x[i] -= 1;
 		}
 
 		return carry > 0;
 	}
-
 	/**
 	 * 
 	 * Modular subtraction. Computes {@code (this - other) modulo mod} and
@@ -1054,6 +1077,40 @@ public class Bignat {
 		}
 	}
 
+
+	/**
+	 * performs a modular division by 2 The output is of operation is saved in
+	 * the input itself
+	 * 
+	 * @param input
+	 * @param inOffset
+	 * @param inLength
+	 */
+	public static void modular_division_by_2(byte[] input, short inOffset,
+			short inLength, byte[] modulos, short modOffset, short modLength) {
+		short carry = 0;
+		short digit_mask = 0xff;
+		short digit_first_bit_mask = 0x80;
+		short lastIndex = (short) (inOffset + inLength - 1);
+
+		short i = inOffset;
+		if ((byte) (input[lastIndex] & 0x01) != 0) {
+			if (Bignat.add(input, inOffset, inLength, modulos, modOffset,
+					modLength)) {
+				carry = digit_first_bit_mask;
+			}
+		}
+
+		for (; i <= lastIndex; i++) {
+			if ((input[i] & 0x01) == 0) {
+				input[i] = (byte) (((input[i] & digit_mask) >> 1) | carry);
+				carry = 0;
+			} else {
+				input[i] = (byte) (((input[i] & digit_mask) >> 1) | carry);
+				carry = digit_first_bit_mask;
+			}
+		}
+	}
 	/**
 	 * 
 	 * Modular division by 2. This method computes {@code x modulo
