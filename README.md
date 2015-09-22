@@ -27,6 +27,6 @@ damage caused by this application, incorrect usage or inaccuracies in this manua
 
 ## LITERATURE
 
-[1] IEEE Computer Society, “*IEEE Standard Specifications for Password-Based Public-Key Cryptographic Techniques*,” IEEE Std 1363.2-2008, pp. 1–127, Jan. 2009.
-[2] M. Hölzl, E. Asnake, R. Mayrhofer, and M. Roland: "*Mobile Application to Java Card Applet Communication using a Password-authenticated Secure Channel*," in Proceedings of the 12th International Conference on Advances in Mobile Computing & Multimedia (MoMM2014), pp. 147--156, ACM, December 2014.
-[3] M. Hölzl, E. Asnake, R. Mayrhofer, and M. Roland: "*A Password-authenticated Secure Channel for App to Java Card Applet Communication*," in International Journal of Pervasive Computing and Communications (IJPCC), In Press.
+- [1] IEEE Computer Society, “*IEEE Standard Specifications for Password-Based Public-Key Cryptographic Techniques*,” IEEE Std 1363.2-2008, pp. 1-127, Jan. 2009.
+- [2] M. Hölzl, E. Asnake, R. Mayrhofer, and M. Roland: "*Mobile Application to Java Card Applet Communication using a Password-authenticated Secure Channel*," in Proceedings of the 12th International Conference on Advances in Mobile Computing & Multimedia (MoMM2014), pp. 147-156, ACM, December 2014.
+- [3] M. Hölzl, E. Asnake, R. Mayrhofer, and M. Roland: "*A Password-authenticated Secure Channel for App to Java Card Applet Communication*," in International Journal of Pervasive Computing and Communications (IJPCC), In Press.
