@@ -52,7 +52,7 @@ public class UsmileKeyAgreement {
 	 * Length definitions for ciphers/hashes 
 	 */
 	// Size of used message digest
-	private final static short LENGTH_MESSAGE_DIGEST = 0x20;
+	private final static short LENGTH_MESSAGE_DIGEST = (short) 0x20;
 
 	// Initialization Vector size and offset in APDU command sent by card
 	private final static short LENGTH_IV = (short) 0x10;
@@ -65,9 +65,9 @@ public class UsmileKeyAgreement {
 	/**
 	 * Offset for the temporary buffer 
 	 */
-	private final static short OUTPUT_OFFSET_S = (short) 0x100;
-	private final static short OUTPUT_OFFSET_O3 = (short) 0x140;//OUTPUT_OFFSET_S + LENGTH_MODULUS;
-	private final static short OUTPUT_OFFSET_2 = (short) 0x180;//OUTPUT_OFFSET_O3 + LENGTH_MESSAGE_DIGEST;
+	private final static short TEMP_OFFSET_S = (short) 0x100;
+	private final static short TEMP_OFFSET_u = TEMP_OFFSET_S + LENGTH_EC_POINT; // 0x100 + 0x31
+	private final static short TEMP_OFFSET_P = TEMP_OFFSET_u + LENGTH_MESSAGE_DIGEST; // 0x131 + 0x20
 
 	/**
 	 * Cipher/Hashing objects
@@ -84,7 +84,7 @@ public class UsmileKeyAgreement {
 	private RSAPublicKey mRsaPublicKekForSquare;
 	private RSAPublicKey mRsaPublicKeyModPow;
 
-	// Elliptic Curve points as public/private key pair (Q_A, Q_B, d_B)
+	// Elliptic Curve points as public/private key pair (Q_B, d_B)
 	private KeyPair mECKeyPairGenerator; 
 	private ECPoint mLocalECPublicKey; // Q_B
 	private ECPrivateKey mLocalECPrivateKey; // d_B
@@ -121,6 +121,7 @@ public class UsmileKeyAgreement {
 	 * 
 	 * @param initBuffer
 	 *            initialization byte array buffer, contains identity':'password
+	 * @param length Length of ID and password
 	 * 
 	 */
 	public UsmileKeyAgreement(byte[] initBuffer, short length) {
@@ -132,6 +133,15 @@ public class UsmileKeyAgreement {
 		 */
 		mUsedMsgDigest = MessageDigest.getInstance(MessageDigest.ALG_SHA_256,
 				false);
+		
+		// Initialize all key objects
+		initializeKeys();
+		
+		// Compute all values which will not change during key agreement and verification phase
+		staticComputations(tempBuffer, (short)0, length);
+	}
+
+	private void initializeKeys() {
 		/**
 		 * init random data generator
 		 */
@@ -148,11 +158,15 @@ public class UsmileKeyAgreement {
 		mRsaPublicKekForSquare.setExponent(SQUARE_EXPONENT, (short) 0x00,
 				(short) 0x01);
 
+		// Copy P of used curve to temporary transient memory for faster computation (used several times)
+		Util.arrayCopy(CurveConstants.P_forRSAOperation, (short) 0x00, tempBuffer, TEMP_OFFSET_P,
+				LENGTH_MODULUS);
+		
 		/**
 		 * set public key modulus
 		 */
-		mRsaPublicKekForSquare.setModulus(CurveConstants.P_forRSAOperation, (short) 0x00, (short) 0x40);
-		mRsaPublicKeyModPow.setModulus(CurveConstants.P_forRSAOperation, (short) 0x00, (short) 0x40);
+		mRsaPublicKekForSquare.setModulus(tempBuffer, TEMP_OFFSET_P, (short) LENGTH_RSAOBJECT_MODULUS);
+		mRsaPublicKeyModPow.setModulus(tempBuffer, TEMP_OFFSET_P, (short) LENGTH_RSAOBJECT_MODULUS);
 
 		/**
 		 * Initialize static values for key agreement
@@ -185,9 +199,6 @@ public class UsmileKeyAgreement {
 		SRP5Utils.initializeECPoint((ECKey)mECKeyPairGenerator.getPublic());
 		SRP5Utils.initializeECPoint(mLocalECPrivateKey);
 		SRP5Utils.initializeECPoint(mLocalECPublicKey);
-		
-		// Compute all values which will not change during key agreement and verification phase
-		staticComputations(length);
 	}
 
 	/**
@@ -195,8 +206,11 @@ public class UsmileKeyAgreement {
 	 * independent). This values are salt, V_pi and U_pi. Called during from the
 	 * constructor of this class (at Applet installation) and for changing the
 	 * secure channel password and/or user ID
+	 * @param idPassword ID and password for establishing a secure channel 
+	 * @param offset Offset to the ID and password array
+	 * @param length Length of ID and password
 	 */
-	public void staticComputations(short length){
+	public void staticComputations(byte[] idPassword, short offset, short length){
 		/**
 		 * Generate salt
 		 */
@@ -205,10 +219,10 @@ public class UsmileKeyAgreement {
 		/**
 		 * compute U_Pi = OS2IP(H (salt, H(identity':'password))) mod N
 		 */
-		mUsedMsgDigest.doFinal(tempBuffer, (short) 0x00, length, tempBuffer,
-				OUTPUT_OFFSET_2);
+		mUsedMsgDigest.doFinal(idPassword, offset, length, tempBuffer,
+				(byte)0x0);
 		mUsedMsgDigest.update(mSalt, (short) 0x00, LENGTH_SALT);
-		mUsedMsgDigest.doFinal(tempBuffer, OUTPUT_OFFSET_2,
+		mUsedMsgDigest.doFinal(tempBuffer, (byte)0x0,
 				LENGTH_MESSAGE_DIGEST, tempBuffer, (short) (0x0));
 
 		// OS2IP mod N
@@ -218,7 +232,8 @@ public class UsmileKeyAgreement {
 		bn.from_byte_array(LENGTH_MODULUS, (short)0, CurveConstants.N, (short)0);
 
 		mCurveP = new Bignat((short)LENGTH_MODULUS, false);
-		mCurveP.from_byte_array(LENGTH_MODULUS, (short)0, CurveConstants.P, (short)0);
+		mCurveP.from_byte_array(LENGTH_MODULUS, (short)0, tempBuffer, TEMP_OFFSET_P);
+
 		
 		// TODO improve computation performance of modulo operation
 		i1.remainder_divide(bn, null);
@@ -237,7 +252,7 @@ public class UsmileKeyAgreement {
 			k.add(Bignat.valueOf(LENGTH_MODULUS, (byte)1));
 			
 			mRsaPublicKeyModPow.setExponent(k.as_byte_array(), (short) 0, (short) k.length());
-			mRsaPublicKeyModPow.setModulus(CurveConstants.P_forRSAOperation, (short) 0x00, (short) 0x40);
+			mRsaPublicKeyModPow.setModulus(tempBuffer, TEMP_OFFSET_P, (short) LENGTH_RSAOBJECT_MODULUS);
 		} else {
 			// TODO
 		}
@@ -248,11 +263,11 @@ public class UsmileKeyAgreement {
 		calculateVPi( mV_Pi, (short) (0), i1.as_byte_array(), (short) (LENGTH_MESSAGE_DIGEST-LENGTH_MODULUS), LENGTH_MODULUS);
 
 		// Copy V_Pi to temporary buffer
-		Util.arrayCopy(mV_Pi, (short) 0, tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1));
-		tempBuffer[OUTPUT_OFFSET_S] = (byte)0x01;
+		Util.arrayCopy(mV_Pi, (short) 0, tempBuffer, (short) TEMP_OFFSET_S, (short) (LENGTH_MODULUS + 1));
+		tempBuffer[TEMP_OFFSET_S] = (byte)0x01;
 		
 		// Compute random point
-		short redpLength = Redp1(tempBuffer, (short) OUTPUT_OFFSET_S, (short) (LENGTH_MODULUS + 1), mREDP, (short) (1));
+		short redpLength = Redp1(tempBuffer, (short) TEMP_OFFSET_S, (short) (LENGTH_MODULUS + 1), mREDP, (short) (1));
 		mREDP[0] = 0x04;
 		
 		// Could not compute random point, return an error
@@ -283,7 +298,10 @@ public class UsmileKeyAgreement {
 		//Copy new public key values into NXP EC point (public parameter of Bob) 
 		short lenW = ((ECPublicKey)mECKeyPairGenerator.getPublic()).getW(tempBuffer, (short) 0x0);
 		mLocalECPublicKey.setW(tempBuffer, (short) 0x0, lenW);
-		
+
+		// Copy P to temporary transient memory for faster computation (used several times)
+		Util.arrayCopy(CurveConstants.P_forRSAOperation, (short) 0x00, tempBuffer, TEMP_OFFSET_P,
+				LENGTH_MODULUS);
 		/**
 		 * Initialize Q_A from incoming buffer
 		 */
@@ -301,7 +319,7 @@ public class UsmileKeyAgreement {
 		}
 		
 		/**
-		 * Compute o3 = H( X (Q_A) | X (Q_B) )
+		 * Compute u = H( X (Q_A) | X (Q_B) )
 		 */
 		// Use Q_A
 		// Only use X coordinate of Q_A and Q_B --> set first byte to 1
@@ -314,9 +332,9 @@ public class UsmileKeyAgreement {
 		mLocalECPublicKey.getW(incomingBuf, ISO7816.OFFSET_CLA);
 		incomingBuf[ISO7816.OFFSET_CLA] = 0x01;
 		
-		// Compute o3 
+		// Compute u 
 		mUsedMsgDigest.doFinal(incomingBuf, ISO7816.OFFSET_CLA, (short) (LENGTH_MODULUS + 1),
-				tempBuffer, (short) (OUTPUT_OFFSET_O3)); // Store the digest at OFFSET 1 so that it can be used
+				tempBuffer, (short) (TEMP_OFFSET_u)); // Store the digest at OFFSET 1 so that it can be used
 														// for verification
 		
 		// Set the description-byte of the Public ECPoint back to 4 
@@ -324,11 +342,11 @@ public class UsmileKeyAgreement {
 
 		////////////////////// ---- SHARED SECRET COMPUTATION ---- //////////////////////
 		/**
-		 * Compute i2 = OS2IP ( o3 )
+		 * Compute i2 = OS2IP ( u )
 		 */
 		// Reset temporary buffer
 		Util.arrayFillNonAtomic(tempBuffer, (short) 0, (short)(LENGTH_RSAOBJECT_MODULUS * 2), (byte) 0);
-		moduloP(tempBuffer, OUTPUT_OFFSET_O3);
+		moduloP(tempBuffer, TEMP_OFFSET_u, tempBuffer, (byte)0);
 		
 		/**
 		 *  Compute Q_A + V_pi * i
@@ -342,30 +360,34 @@ public class UsmileKeyAgreement {
 		short len = mNxpPointForECAddition.getW(tempBuffer, (short) 0);
 		mECMultiplHelper.init(mLocalECPrivateKey); // d_B
 		mECMultiplHelper.generateSecret(tempBuffer, (short) 0, len, 
-				tempBuffer, (short) (OUTPUT_OFFSET_S-1 )); 	
+				tempBuffer, (short) (TEMP_OFFSET_S-1 )); 	
 				// Store and use X coordinate at Location of S --> 
 				// start one byte before to remove leading 0x04 in hash generation
 		
 		/**
 		 * compute K = H(S)
 		 */
-		mUsedMsgDigest.doFinal(tempBuffer, OUTPUT_OFFSET_S, LENGTH_MODULUS,
+		mUsedMsgDigest.doFinal(tempBuffer, TEMP_OFFSET_S, LENGTH_MODULUS,
 				tempBuffer, (short) 0x00); // Only use x coordinate for shared secret
 
 		/**
 		 * Return Q_B, salt and IV
 		 */
-
 		len += getSalt_and_IV(incomingBuf, (short)(ISO7816.OFFSET_CLA + LENGTH_EC_POINT));
 		apdu.setOutgoingAndSend(ISO7816.OFFSET_CLA, len);
+		
 		return true;
 	}
-
-	public short getOutput(byte[] dstBuffer, short dstOffset){
-		Util.arrayCopy(mREDP, (short)0, dstBuffer, dstOffset, LENGTH_EC_POINT);
-		return LENGTH_EC_POINT;
-	}
 	
+	/**
+	 * Compute V_Pi = u_Pi * G 
+	 * @param dstbuffer
+	 * @param offset
+	 * @param uPiSrc
+	 * @param uPiOffset
+	 * @param length
+	 * @return
+	 */
 	public short calculateVPi(byte[] dstbuffer, short offset, byte[] uPiSrc, short uPiOffset, short length) {
 		return multiplyGeneratorPoint(dstbuffer, offset, uPiSrc, uPiOffset, length);
 	}
@@ -409,17 +431,15 @@ public class UsmileKeyAgreement {
 		
 		// Try to find a random EC point
 		while(counter < REDP_MAX_INCREASE && outputElength == 0) {
-			Util.arrayFillNonAtomic(o3, (short) 0, LENGTH_MESSAGE_DIGEST, (byte) 0);
 			Util.arrayFillNonAtomic(tempBuffer, (short) 0, (short)(LENGTH_RSAOBJECT_MODULUS *2), (byte) 0);
+			Util.arrayFillNonAtomic(outarray, (short) (offset), (short) (LENGTH_MODULUS*2), (byte) 0 );
 			
 			o2 = getPadded(i1.as_byte_array(),(short)0,i1.length(), LENGTH_MESSAGE_DIGEST);
 			mUsedMsgDigest.doFinal(o2, (short) 0, LENGTH_MESSAGE_DIGEST,
 					o3, (short) 0x00);
-			moduloP(o3,(short)0);
+			moduloP(o3, (short)0, tempBuffer, (byte) (0));
 			
-			Util.arrayFillNonAtomic(outarray, (short) (offset), (short) (LENGTH_MODULUS*2), (byte) 0 );
 			Util.arrayCopy(tempBuffer, (short) (0), outarray, offset, LENGTH_MODULUS);
-	
 			
 			if (!isZero(tempBuffer, (short)0, LENGTH_MODULUS)){
 					if (Bignat.valueOf(LENGTH_MODULUS, (byte)3).same_value(mCurveP)){
@@ -447,8 +467,8 @@ public class UsmileKeyAgreement {
 				    		 */
 			    			if(Bignat.add(tempBuffer, (short)0, LENGTH_MODULUS, CurveConstants.A, 
 			    					(short)0, (short) CurveConstants.A.length)){
-			    				Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P_forRSAOperation,
-				    					(short) 0, LENGTH_MODULUS);
+			    				Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, tempBuffer,
+				    					TEMP_OFFSET_P, LENGTH_MODULUS);
 				    		}
 
 							/**
@@ -483,8 +503,8 @@ public class UsmileKeyAgreement {
 				    		 */
 				    		if(Bignat.add(tempBuffer, (short)0, LENGTH_MODULUS, CurveConstants.B, 
 				    				(short)0, (short) CurveConstants.B.length)){
-				    			Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P,
-				    					(short) 0, LENGTH_MODULUS);
+				    			Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, tempBuffer,
+				    					TEMP_OFFSET_P, LENGTH_MODULUS);
 				    		}
 				    		Util.arrayCopy(tempBuffer, (short)0, tempBuffer, LENGTH_RSAOBJECT_MODULUS, LENGTH_MODULUS);
 				    		
@@ -512,11 +532,11 @@ public class UsmileKeyAgreement {
 								byte mu = (byte) (i1.getLastByte() & 0x01);
 								
 								if(mu == 1) { // negate
-									Util.arrayCopy(CurveConstants.P, (short)0, tempBuffer, (short) (0), LENGTH_MODULUS);
+									Util.arrayCopy(tempBuffer, TEMP_OFFSET_P, tempBuffer, (short) (0), LENGTH_MODULUS);
 						    		if(Bignat.subtract(tempBuffer, (short) 0x00, LENGTH_MODULUS, outarray,
 						    				(short) (offset+LENGTH_MODULUS), LENGTH_MODULUS)) {
-						    			Bignat.add(tempBuffer, (short) 0x00, LENGTH_MODULUS, CurveConstants.P,
-						    					(short) 0, LENGTH_MODULUS);
+						    			Bignat.add(tempBuffer, (short) 0x00, LENGTH_MODULUS, tempBuffer,
+						    					TEMP_OFFSET_P, LENGTH_MODULUS);
 						    		}
 									// TODO EC point multiply with cofactor H !
 
@@ -556,12 +576,13 @@ public class UsmileKeyAgreement {
 
 
 	/**
-	 * Find the modular square root of a given large integer on the EC. 
-	 * @param alpha
-	 * @param offset
-	 * @param length
-	 * @param out
-	 * @param outoffset
+	 * Find the modular square root of a given large integer 
+	 * (Method for finding a square root modular a prime as described in IEEE Std 1363a-2004: A.17.1.3.) 
+	 * @param alpha Value of which the square root should be found
+	 * @param offset Offset to alpha in the byte array
+	 * @param length Length of alpha
+	 * @param out Output array
+	 * @param outoffset Output offset
 	 */
 	private void findSquareRoot(byte[] alpha, short offset, short length, byte[] out, short outoffset) {
 		Bignat helper = new Bignat((short) LENGTH_RSAOBJECT_MODULUS, false);
@@ -616,17 +637,18 @@ public class UsmileKeyAgreement {
 	 * Used modular multiplication of the big integer with the value one.    
 	 * @param data Data from which the modulos should be computed
 	 * @param dataoffset Offset of data
+	 * @param outarray Output array (should have at least LENGTH_RSAOBJECT_MODULUS size)
 	 */
-	private void moduloP(byte[] data, short dataoffset){
-		Util.arrayCopy(data, dataoffset, tempBuffer, 
-				(short)(LENGTH_PADDING_FOR_SQUARE_MULT-(LENGTH_MESSAGE_DIGEST-LENGTH_MODULUS)), 
+	private void moduloP(byte[] data, short dataoffset, byte[] outarray, byte outoffset){
+		Util.arrayCopy(data, dataoffset, outarray, 
+				(short)(outoffset + LENGTH_PADDING_FOR_SQUARE_MULT-(LENGTH_MESSAGE_DIGEST-LENGTH_MODULUS)), 
 				LENGTH_MESSAGE_DIGEST);
 		
 		// Set multiplier to one (only modulo operation)
 		tempBuffer[LENGTH_RSAOBJECT_MODULUS + LENGTH_PADDING_FOR_SQUARE_MULT + LENGTH_MODULUS - 1]=0x01;
 		
 		// Multiply data with 1 for modulo operation 
-		modMultiply(tempBuffer, (short)0, LENGTH_RSAOBJECT_MODULUS, 
+		modMultiply(outarray, outoffset, LENGTH_RSAOBJECT_MODULUS, 
 				tempBuffer, LENGTH_RSAOBJECT_MODULUS, LENGTH_RSAOBJECT_MODULUS, 
 				(short) (LENGTH_RSAOBJECT_MODULUS*2));
 	}
@@ -663,14 +685,12 @@ public class UsmileKeyAgreement {
 		/**
 		 * x+y
 		 */
-		Util.arrayCopy(CurveConstants.P_forRSAOperation, (short) 0x00, tempBuffer, OUTPUT_OFFSET_2,
-				LENGTH_MODULUS);
 		Util.arrayCopy(x, xOffset, tempBuffer, tempOutoffset, xLength);
 		if (Bignat.add(x, LENGTH_PADDING_FOR_SQUARE_MULT, (LENGTH_MODULUS), y,
 				(short) (yOffset+LENGTH_PADDING_FOR_SQUARE_MULT), LENGTH_MODULUS)) {
-			Bignat.subtract(x, LENGTH_PADDING_FOR_SQUARE_MULT, (LENGTH_MODULUS), CurveConstants.P_forRSAOperation,
-					(short) 0x00, LENGTH_MODULUS);
-		} // OK
+			Bignat.subtract(x, LENGTH_PADDING_FOR_SQUARE_MULT, (LENGTH_MODULUS), tempBuffer,
+					TEMP_OFFSET_P, LENGTH_MODULUS);
+		} 
 		
 		/**
 		 * (x+y)^2
@@ -689,9 +709,9 @@ public class UsmileKeyAgreement {
 		 */
 		if (Bignat.subtract(x, xOffset, LENGTH_MODULUS, tempBuffer, tempOutoffset,
 				LENGTH_MODULUS)) {
-			Bignat.add(x, xOffset, LENGTH_MODULUS, CurveConstants.P_forRSAOperation,
-					(short) 0x00, LENGTH_MODULUS);
-		} // OK
+			Bignat.add(x, xOffset, LENGTH_MODULUS, tempBuffer,
+					TEMP_OFFSET_P, LENGTH_MODULUS);
+		} 
 
 		/**
 		 * compute y^2
@@ -706,8 +726,8 @@ public class UsmileKeyAgreement {
 		if (Bignat.subtract(x, xOffset, LENGTH_MODULUS, y, yOffset,
 				LENGTH_MODULUS)) {
 
-			Bignat.add(x, xOffset, LENGTH_MODULUS, CurveConstants.P_forRSAOperation,
-					(short) 0x00, LENGTH_MODULUS);
+			Bignat.add(x, xOffset, LENGTH_MODULUS, tempBuffer,
+					TEMP_OFFSET_P, LENGTH_MODULUS);
 
 		}
 
@@ -715,7 +735,7 @@ public class UsmileKeyAgreement {
 		 * divide by 2
 		 */
 
-		Bignat.modular_division_by_2(x, xOffset, LENGTH_MODULUS, CurveConstants.P, (short) 0, CurveConstants.MODULUS_SIZE);
+		Bignat.modular_division_by_2(x, xOffset, LENGTH_MODULUS, tempBuffer, TEMP_OFFSET_P, CurveConstants.MODULUS_SIZE);
 	}
 	
 	/**
@@ -785,12 +805,12 @@ public class UsmileKeyAgreement {
 	 */
 	
 	public boolean authenticate(APDU apdu, byte[] incomingBuf) {
-		short M_offset = (short)(OUTPUT_OFFSET_S - LENGTH_MESSAGE_DIGEST);
+		short M_offset = (short)(TEMP_OFFSET_S - LENGTH_MESSAGE_DIGEST);
 		/**
 		 * compute expected authentication data M = H(o3, S)
 		 */
-		mUsedMsgDigest.update(tempBuffer, OUTPUT_OFFSET_O3, LENGTH_MESSAGE_DIGEST);
-		mUsedMsgDigest.doFinal(tempBuffer, OUTPUT_OFFSET_S, LENGTH_MODULUS,
+		mUsedMsgDigest.update(tempBuffer, TEMP_OFFSET_u, LENGTH_MESSAGE_DIGEST);
+		mUsedMsgDigest.doFinal(tempBuffer, TEMP_OFFSET_S, LENGTH_MODULUS,
 				tempBuffer, (short) M_offset );
 
 		/**
@@ -802,18 +822,13 @@ public class UsmileKeyAgreement {
 		if (Util.arrayCompare(incomingBuf, ISO7816.OFFSET_CDATA, tempBuffer,
 				(short) M_offset, LENGTH_MESSAGE_DIGEST) == 0) {
 			mUsedMsgDigest
-					.update(tempBuffer, OUTPUT_OFFSET_O3, LENGTH_MESSAGE_DIGEST);
+					.update(tempBuffer, TEMP_OFFSET_u, (byte)LENGTH_MESSAGE_DIGEST);
 			mUsedMsgDigest.doFinal(tempBuffer, M_offset, (short) (LENGTH_MODULUS + LENGTH_MESSAGE_DIGEST),
 					incomingBuf, (short) ISO7816.OFFSET_CDATA);
 
-//			Util.arrayCopy(tempBuffer, M_offset, incomingBuf, ISO7816.OFFSET_CDATA, (short) (LENGTH_MODULUS + LENGTH_MESSAGE_DIGEST));
-			
 			apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, (short) (LENGTH_MESSAGE_DIGEST));
 			return true;
-		} else {
-			Util.arrayCopy(tempBuffer, OUTPUT_OFFSET_S, incomingBuf, ISO7816.OFFSET_CDATA, LENGTH_MODULUS);
-			apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA,LENGTH_MODULUS);
-		}
+		} 
 
 		return false;
 	}

@@ -108,11 +108,6 @@ public class UsmileSecureChannel {
 					currentStage[(short) 0x00] = 0x01;
 				}
 				break; 
-
-			case 0x10: 
-				short len1 = usmileKeyAgreement.getOutput(incomingBuf,ISO7816.OFFSET_CDATA);
-				apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA,len1);
-				break; 
 				
 			case INS_KEY_AGREEMENT_02:
 				if (currentStage[(short) 0x00] == 0x01) {
@@ -154,7 +149,7 @@ public class UsmileSecureChannel {
 					 */
 					Util.arrayFillNonAtomic(incomingBuf, ISO7816.OFFSET_CDATA, len, (byte)0x00);
 					
-					usmileKeyAgreement.staticComputations(len);
+					usmileKeyAgreement.staticComputations(temp_outputBuf, (byte) 0, len);
 					
 					currentStage[(short) 0x00] = 0x00;
 					

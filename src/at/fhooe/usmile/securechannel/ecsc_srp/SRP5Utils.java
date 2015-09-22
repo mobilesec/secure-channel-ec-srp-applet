@@ -15,11 +15,11 @@ public class SRP5Utils {
 	}
 
 	public static void initializeECPoint(ECKey ecPoint) {
-		ecPoint.setFieldFP(CurveConstants.P, BAS, (short)24);
-		ecPoint.setA(CurveConstants.A, BAS, (short)24);
-		ecPoint.setB(CurveConstants.B, BAS, (short)24);
-		ecPoint.setG(CurveConstants.G, BAS, (short)49);
+		ecPoint.setFieldFP(CurveConstants.P, BAS, CurveConstants.MODULUS_SIZE);
+		ecPoint.setA(CurveConstants.A, BAS, CurveConstants.MODULUS_SIZE);
+		ecPoint.setB(CurveConstants.B, BAS, CurveConstants.MODULUS_SIZE);
+		ecPoint.setG(CurveConstants.G, BAS, (short) (CurveConstants.MODULUS_SIZE * 2 + 1));
 		ecPoint.setK(CurveConstants.H);
-		ecPoint.setR(CurveConstants.N, BAS, (short)24);
+		ecPoint.setR(CurveConstants.N, BAS, CurveConstants.MODULUS_SIZE);
 	}
 }
