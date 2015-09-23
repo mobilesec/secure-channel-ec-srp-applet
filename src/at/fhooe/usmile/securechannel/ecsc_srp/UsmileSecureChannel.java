@@ -124,8 +124,8 @@ public class UsmileSecureChannel {
 							sessionState[0] = 0x01;  
 							connectionTries = (byte)0x00;
 						}
-					}else{
-//						ISOException.throwIt(ISO7816.SW_DATA_INVALID);
+					} else {
+						ISOException.throwIt(ISO7816.SW_DATA_INVALID);
 					}
 				}
 				break; 

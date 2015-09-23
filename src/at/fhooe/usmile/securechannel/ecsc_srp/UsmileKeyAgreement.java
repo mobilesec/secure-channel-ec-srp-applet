@@ -807,7 +807,7 @@ public class UsmileKeyAgreement {
 	public boolean authenticate(APDU apdu, byte[] incomingBuf) {
 		short M_offset = (short)(TEMP_OFFSET_S - LENGTH_MESSAGE_DIGEST);
 		/**
-		 * compute expected authentication data M = H(o3, S)
+		 * compute expected authentication data M = H(u, S)
 		 */
 		mUsedMsgDigest.update(tempBuffer, TEMP_OFFSET_u, LENGTH_MESSAGE_DIGEST);
 		mUsedMsgDigest.doFinal(tempBuffer, TEMP_OFFSET_S, LENGTH_MODULUS,
@@ -815,7 +815,7 @@ public class UsmileKeyAgreement {
 
 		/**
 		 * compare with incoming Auth data if authenticated compute server ..
-		 * (SE ) Authentication Data.... H (o3, M, S) from the previous operation
+		 * (SE ) Authentication Data.... H (u, M, S) from the previous operation
 		 * tempoutput contains M, S from offset M_offset - M_offset +
 		 * LENGTH_MODULUS
 		 */

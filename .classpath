@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <classpath>
 	<classpathentry excluding="at/fhooe/usmile/securechannel/sc_srp_6a/SecureMessaging.java|at/fhooe/usmile/securechannel/sc_srp_6a/UsmileKeyAgreement.java|at/fhooe/usmile/securechannel/sc_srp_6a/UsmileSecureChannel.java" kind="src" path="src"/>
-	<classpathentry kind="con" path="com.ibm.bluez.jcop.eclipse.containers.cardconfig/com.ibm.bluez.jcop.eclipse.cardconfigs.custom;com.ibm.bluez.jcop.eclipse.cardapis.jc222;com.ibm.bluez.jcop.eclipse.cardapis.gp211;com.ibm.bluez.jcop.eclipse.targetpacks.smartmx.cardapis.jcopx-2.4.1.R3"/>
-	<classpathentry kind="lib" path="/opt/eclipse/plugins/com.ibm.bluez.jcop.eclipse.targetpacksrow.smartmx_3.7.3.1/apis/jcopx-2.4.1.R3/jcopx-2.4.1.R3.jar"/>
+	<classpathentry kind="con" path="com.ibm.bluez.jcop.eclipse.containers.cardconfig/com.ibm.bluez.jcop.eclipse.cardconfigs.custom;com.ibm.bluez.jcop.eclipse.cardapis.jc222;com.ibm.bluez.jcop.eclipse.cardapis.gp211"/>
+	<classpathentry kind="lib" path="/opt/eclipse/plugins/com.ibm.bluez.jcop.eclipse.targetpacksrow.smartmx_3.7.3.1/apis/jcopx-2.4.1.R3/jcopx-2.4.1.R3.jar" sourcepath="/opt/eclipse/plugins/com.ibm.bluez.jcop.eclipse.targetpacksrow.smartmx_3.7.3.1/apis/jcopx-2.4.1.R3/jcopx-2.4.1.R3-src.jar"/>
 	<classpathentry kind="output" path="bin"/>
 </classpath>
