@@ -6,7 +6,7 @@ implementation of an off-card application, such as an Android application using
 our [EC-SRP Android Library](https://github.com/mobilesec/secure-channel-ec-srp-android-lib),
 you can establish a secure communication channel that is mutually authenticated
 with a PIN or password. This implementation relys on standard Java Card 2.2 API
-functionality as well as NXP extended APIs v2.4.1. In order to use this secure channel protocol implementation you will therefore need a JCOP 2.4.1 based smart card. 
+functionality as well as NXP extended APIs v2.4.1.R3. In order to use this secure channel protocol implementation you will therefore need a JCOP 2.4.1 based smart card. 
 
 Although secure elements with Java Card 2.2 API are usually
 equipped with the necessary hardware for computation of modulo operations as used
@@ -27,6 +27,8 @@ damage caused by this application, incorrect usage or inaccuracies in this manua
 
 ## LITERATURE
 
-- [1] IEEE Computer Society, “*IEEE Standard Specifications for Password-Based Public-Key Cryptographic Techniques*,” IEEE Std 1363.2-2008, pp. 1-127, Jan. 2009.
-- [2] M. Hölzl, E. Asnake, R. Mayrhofer, and M. Roland: "*Mobile Application to Java Card Applet Communication using a Password-authenticated Secure Channel*," in Proceedings of the 12th International Conference on Advances in Mobile Computing & Multimedia (MoMM2014), pp. 147-156, ACM, December 2014.
-- [3] M. Hölzl, E. Asnake, R. Mayrhofer, and M. Roland: "*A Password-authenticated Secure Channel for App to Java Card Applet Communication*," in International Journal of Pervasive Computing and Communications (IJPCC), In Press.
+[1] IEEE Computer Society, "*IEEE Standard Specifications for Password-Based Public-Key Cryptographic Techniques*," IEEE Std 1363.2-2008, pp. 1-127, Jan. 2009.
+
+[2] M. Hölzl, E. Asnake, R. Mayrhofer, and M. Roland: "*Mobile Application to Java Card Applet Communication using a Password-authenticated Secure Channel*," in Proceedings of the 12th International Conference on Advances in Mobile Computing & Multimedia (MoMM2014), pp. 147-156, ACM, December 2014.
+
+[3] M. Hölzl, E. Asnake, R. Mayrhofer, and M. Roland: "*A Password-authenticated Secure Channel for App to Java Card Applet Communication*," in International Journal of Pervasive Computing and Communications (IJPCC), In Press.
